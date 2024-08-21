@@ -16,7 +16,7 @@ from rl_framework.common.logging import setup_logger
 if ModelConfig.backend == "tensorflow":
     from model.tensorflow.model import Model
 elif ModelConfig.backend == "pytorch":
-    from model.pytorch.model import Model
+    from model.pytorch.model_v4 import Model
     import torch
 
     torch.set_num_threads(8)
