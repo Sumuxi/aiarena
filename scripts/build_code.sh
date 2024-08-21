@@ -3,6 +3,7 @@
 # usage: build_code.sh
 # env: OUTPUT_DIR, default is ./build
 # env: OUTPUT_FILENAME, default is code-$version.zip
+# env: MODEL_FILE, model file path
 
 version=2.3.3-$(date +"%Y%m%d%H%M")
 filename=code-$version.zip
@@ -29,6 +30,8 @@ rsync -a --exclude="checkpoints_*" \
     --exclude="code/learner/model/init" \
     $ROOT_DIR/code $TMP_DIR
 
+# 复制模型文件
+cp $MODEL_FILE $TMP_DIR/code/actor/model/init/model.pth
 cp -r $ROOT_DIR/scripts $TMP_DIR
 
 # generate version

@@ -56,6 +56,7 @@ class ModelManager(object):
         env = os.environ.copy()
         env["OUTPUT_DIR"] = send_model_dir
         env["OUTPUT_FILENAME"] = temp_ckpt + ".zip"
+        env["MODEL_FILE"] = save_model_dir + f"/model_step{local_step}.pth"
 
         os.makedirs(send_model_dir, exist_ok=True)
         os.makedirs("/aiarena/code/actor/model/init", exist_ok=True)
@@ -103,11 +104,11 @@ class ModelManager(object):
         )
         return state_dict.get("step", 0)
 
-    def save_checkpoint(self, exp_save_dir, net, optimizer, checkpoint_dir: str, step: int):
+    def save_checkpoint(self, net, optimizer, checkpoint_dir: str, step: int):
         os.makedirs(checkpoint_dir, exist_ok=True)
         step = int(step)
         self.last_step = step
-        checkpoint_file = os.path.join(checkpoint_dir, "model.pth")
+        checkpoint_file = os.path.join(checkpoint_dir, f"model_step{step}.pth")
         torch.save(
             {
                 "network_state_dict": net.state_dict(),
@@ -117,14 +118,5 @@ class ModelManager(object):
             checkpoint_file,
         )
 
-        ckpt_file_path = os.path.join(exp_save_dir, "ckpt", f"model_step{step}.pth")
-        os.makedirs(os.path.dirname(ckpt_file_path), exist_ok=True)
-        torch.save(
-            {
-                "network_state_dict": net.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "step": step,
-            },
-            ckpt_file_path,
-        )
+        
 

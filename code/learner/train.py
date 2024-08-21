@@ -1,3 +1,4 @@
+import importlib
 import os
 
 from rl_framework.learner.dataset.sample_generation.offline_rlinfo_adapter import (
@@ -12,22 +13,36 @@ from absl import flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_boolean("single_test", 0, "test_mode")
-flags.DEFINE_integer("local_rank", 0, "local_rank")
 flags.DEFINE_string("exp_name", "test", "experiment name")  # 指定本次实验的名称，方便保存相关文件到对应的目录
+flags.DEFINE_integer("local_rank", 0, "local_rank")
+flags.DEFINE_string("model_file", "NetworkModel", "model file name")  # 指定模型文件名（不带后缀）
+
+
+def load_class(module_name, class_name):
+    # 动态导入模块
+    module = importlib.import_module(module_name)
+    # 从模块中获取类
+    clazz = getattr(module, class_name)
+    return clazz
 
 
 def main(argv):
-    config_path = os.path.join(os.path.dirname(__file__), "config", "common.conf")
+    project_dir = "/aiarena"
+    exp_save_dir = os.path.join(project_dir, "output", FLAGS.exp_name)
 
+    config_path = os.path.join(os.path.dirname(__file__), "config", "common.conf")
     config_manager = ConfigControl(config_path)
+
+    config_manager.exp_save_dir = exp_save_dir
+    config_manager.save_model_dir = os.path.join(exp_save_dir, "ckpt")
+    config_manager.train_dir = os.path.join(exp_save_dir, "logs/learner")
+    config_manager.send_model_dir = os.path.join(exp_save_dir, "backup_model")
+
     os.makedirs(config_manager.save_model_dir, exist_ok=True)
     os.makedirs(config_manager.train_dir, exist_ok=True)
     os.makedirs(config_manager.send_model_dir, exist_ok=True)
 
-    project_dir = "/aiarena"
-    exp_save_dir = os.path.join(project_dir, "output", FLAGS.exp_name)
-    config_manager.exp_save_dir = exp_save_dir
-
+    model_file = FLAGS.model_file
     use_backend = config_manager.backend
 
     if use_backend == "pytorch":
@@ -39,7 +54,12 @@ def main(argv):
             NetworkDataset as NetworkDatasetRandom,
         )
         from rl_framework.learner.framework.pytorch.apd_benchmark import Benchmark
-        from networkmodel.pytorch.model_v4 import NetworkModel
+        # from networkmodel.pytorch.model_v4 import NetworkModel
+        # 改成动态导入
+        module_name = f"networkmodel.pytorch.{model_file}"
+        class_name = "NetworkModel"
+        NetworkModel = load_class(module_name, class_name)
+
         distributed_backend = config_manager.distributed_backend
         if distributed_backend == "horovod":
             from rl_framework.learner.framework.pytorch.node_info_hvd import NodeInfo
@@ -66,7 +86,7 @@ def main(argv):
             file_cnt=Config.FILE_CNT,
         )
 
-    log_manager = LogManager(loss_file_path=os.path.join(exp_save_dir, "logs/learner/loss.txt"), backend="pytorch")
+    log_manager = LogManager(loss_file_path=os.path.join(config_manager.train_dir, "loss.txt"), backend="pytorch")
     network = NetworkModel()
     model_manager = ModelManager(config_manager.push_to_modelpool, save_interval=0)
     benchmark = Benchmark(
