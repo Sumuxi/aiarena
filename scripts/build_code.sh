@@ -8,13 +8,13 @@ version=2.3.3-$(date +"%Y%m%d%H%M")
 filename=code-$version.zip
 
 # current shell script directory
-SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)
+SCRIPT_DIR=$(cd -- "$(dirname -- "$0")" &>/dev/null && pwd)
 ROOT_DIR=$(dirname $SCRIPT_DIR)/
 TMP_DIR=$(mktemp -d)
 
 output_dir=${OUTPUT_DIR:-"$SCRIPT_DIR/../build"}
 mkdir -p $output_dir
-output_dir=$(cd -- "$output_dir" &>/dev/null && pwd)
+#output_dir=$(cd -- "$output_dir" &>/dev/null && pwd)
 filename=${OUTPUT_FILENAME:-"code-$version.zip"}
 
 
