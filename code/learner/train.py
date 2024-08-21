@@ -12,6 +12,8 @@ from absl import flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_boolean("single_test", 0, "test_mode")
+flags.DEFINE_integer("local_rank", 0, "local_rank")
+flags.DEFINE_string("exp_name", "test", "experiment name")  # 指定本次实验的名称，方便保存相关文件到对应的目录
 
 
 def main(argv):
@@ -21,6 +23,10 @@ def main(argv):
     os.makedirs(config_manager.save_model_dir, exist_ok=True)
     os.makedirs(config_manager.train_dir, exist_ok=True)
     os.makedirs(config_manager.send_model_dir, exist_ok=True)
+
+    project_dir = "/aiarena"
+    exp_save_dir = os.path.join(project_dir, "output", FLAGS.exp_name)
+    config_manager.exp_save_dir = exp_save_dir
 
     use_backend = config_manager.backend
 
@@ -44,7 +50,7 @@ def main(argv):
             "Support backend in [pytorch], Check your training backend..."
         )
 
-    node_info = NodeInfo()
+    node_info = NodeInfo(rank=FLAGS.local_rank, rank_size=8, local_rank=FLAGS.local_rank, local_size=8)
     adapter = OfflineRlInfoAdapter(Config.data_shapes)
     config_manager.push_to_modelpool = False
     if FLAGS.single_test:
@@ -56,11 +62,11 @@ def main(argv):
         dataset = NetworkDatasetLocal(
             config_manager,
             adapter,
-            npz_directory="/dataset/train",
+            npz_directory="/dataset/valid",
             file_cnt=Config.FILE_CNT,
         )
 
-    log_manager = LogManager(loss_file_path=os.path.join(config_manager.train_dir, "loss.txt"), backend="pytorch")
+    log_manager = LogManager(loss_file_path=os.path.join(exp_save_dir, "logs/learner/loss.txt"), backend="pytorch")
     network = NetworkModel()
     model_manager = ModelManager(config_manager.push_to_modelpool, save_interval=0)
     benchmark = Benchmark(
