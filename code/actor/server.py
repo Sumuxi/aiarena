@@ -19,8 +19,8 @@ elif ModelConfig.backend == "pytorch":
     from model.pytorch.model_v4 import Model
     import torch
 
-    torch.set_num_threads(8)
-    torch.set_num_interop_threads(8)
+    torch.set_num_threads(1)
+    torch.set_num_interop_threads(1)
 else:
     raise NotImplementedError("check ModelConfig, backend=['tensorflow', 'pytorch']")
 
