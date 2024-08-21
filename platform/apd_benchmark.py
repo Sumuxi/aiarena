@@ -180,7 +180,7 @@ class Benchmark(object):
             LOG.info(f"Saving checkpoint_0 to {self.config_manager.save_model_dir}")
             os.makedirs(self.config_manager.save_model_dir, exist_ok=True)
             self.model_manager.save_checkpoint(
-                self.net, self.optimizer, self.config_manager.save_model_dir, 0
+                self.config_manager.exp_save_dir, self.net, self.optimizer, self.config_manager.save_model_dir, 0
             )
             self.model_manager.send_model(
                 self.config_manager.save_model_dir,
@@ -301,6 +301,7 @@ class Benchmark(object):
                     and self.node.is_chief_rank
             ):
                 self.model_manager.save_checkpoint(
+                    self.config_manager.exp_save_dir,
                     self.net,
                     self.optimizer,
                     self.config_manager.save_model_dir,
@@ -324,6 +325,7 @@ class Benchmark(object):
         # Save the model checkpoint.
         if self.node.is_chief_rank:
             self.model_manager.save_checkpoint(
+                self.config_manager.exp_save_dir,
                 self.net,
                 self.optimizer,
                 self.config_manager.save_model_dir,
