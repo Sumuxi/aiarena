@@ -62,7 +62,7 @@ def main(argv):
         dataset = NetworkDatasetLocal(
             config_manager,
             adapter,
-            npz_directory="/dataset/valid",
+            npz_directory="/dataset/train",
             file_cnt=Config.FILE_CNT,
         )
 
