@@ -184,7 +184,7 @@ class Benchmark(object):
             )
             self.model_manager.send_model(
                 self.config_manager.save_model_dir,
-                self.config_manager.send_model_dir,
+                os.path.join(self.config_manager.exp_save_dir, "backup_model"),
                 self.local_step.item()
             )
 
@@ -309,7 +309,7 @@ class Benchmark(object):
                 )
                 self.model_manager.send_model(
                     self.config_manager.save_model_dir,
-                    self.config_manager.send_model_dir,
+                    os.path.join(self.config_manager.exp_save_dir, "backup_model"),
                     self.local_step.item()
                 )
 
@@ -333,7 +333,7 @@ class Benchmark(object):
             )
             self.model_manager.send_model(
                 self.config_manager.save_model_dir,
-                self.config_manager.send_model_dir,
+                os.path.join(self.config_manager.exp_save_dir, "backup_model"),
                 self.local_step.item()
             )
 
