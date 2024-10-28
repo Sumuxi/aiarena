@@ -19,9 +19,9 @@ from config.model_config import ModelConfig as Config
 ##################
 ## Actual model ##
 ##################
-class NetworkModel(nn.Module):
+class Model(nn.Module):
     def __init__(self, ModelConfig):
-        super(NetworkModel, self).__init__()
+        super(Model, self).__init__()
         # feature configure parameter
         self.model_name = Config.NETWORK_NAME
 
@@ -466,7 +466,7 @@ class NetworkModel(nn.Module):
                     label_logits_subtract_max = torch.clamp(
                         _hero_fc_label_result[task_index] - torch.max(
                             _hero_fc_label_result[task_index] - legal_action_flag_list_max_mask, dim=1, keepdim=True
-                        ).values, -boundary, 1)
+                        ).old_values, -boundary, 1)
 
                     label_logits_subtract_max_list.append(label_logits_subtract_max)
 

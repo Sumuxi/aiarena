@@ -1,0 +1,75 @@
+NetworkModel(
+  (conv_layers): Sequential(
+    (0): Conv2d(6, 18, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (1): ReLU()
+    (2): MaxPool2d(kernel_size=3, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (3): Conv2d(18, 12, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (4): MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)
+  )
+  (hero_share_mlp): Sequential(
+    (0): Linear(in_features=251, out_features=256, bias=True)
+    (1): ReLU()
+  )
+  (hero_frd_mlp): Linear(in_features=256, out_features=128, bias=True)
+  (hero_emy_mlp): Linear(in_features=256, out_features=128, bias=True)
+  (public_info_mlp): Sequential(
+    (0): Linear(in_features=44, out_features=128, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=128, out_features=128, bias=True)
+  )
+  (soldier_share_mlp): Sequential(
+    (0): Linear(in_features=25, out_features=128, bias=True)
+    (1): ReLU()
+  )
+  (soldier_frd_mlp): Linear(in_features=128, out_features=128, bias=True)
+  (soldier_emy_mlp): Linear(in_features=128, out_features=128, bias=True)
+  (organ_share_mlp): Sequential(
+    (0): Linear(in_features=29, out_features=128, bias=True)
+    (1): ReLU()
+  )
+  (organ_frd_mlp): Linear(in_features=128, out_features=128, bias=True)
+  (organ_emy_mlp): Linear(in_features=128, out_features=128, bias=True)
+  (monster_mlp): Sequential(
+    (0): Linear(in_features=28, out_features=128, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=128, out_features=128, bias=True)
+  )
+  (global_mlp): Sequential(
+    (0): Linear(in_features=68, out_features=128, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=128, out_features=128, bias=True)
+  )
+  (concat_mlp): Sequential(
+    (0): Linear(in_features=1344, out_features=1024, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=1024, out_features=768, bias=True)
+    (3): ReLU()
+    (4): Linear(in_features=768, out_features=512, bias=True)
+    (5): ReLU()
+    (6): Linear(in_features=512, out_features=512, bias=True)
+    (7): ReLU()
+  )
+  (action_heads): ModuleList(
+    (0): Sequential(
+      (0): Linear(in_features=512, out_features=256, bias=True)
+      (1): ReLU()
+      (2): Linear(in_features=256, out_features=13, bias=True)
+    )
+    (1): Sequential(
+      (0): Linear(in_features=512, out_features=256, bias=True)
+      (1): ReLU()
+      (2): Linear(in_features=256, out_features=25, bias=True)
+    )
+    (2-3): 2 x Sequential(
+      (0): Linear(in_features=512, out_features=256, bias=True)
+      (1): ReLU()
+      (2): Linear(in_features=256, out_features=42, bias=True)
+    )
+  )
+  (target_embed): Linear(in_features=128, out_features=128, bias=True)
+  (target_head): Sequential(
+    (0): Linear(in_features=512, out_features=256, bias=True)
+    (1): ReLU()
+    (2): Linear(in_features=256, out_features=128, bias=True)
+  )
+)

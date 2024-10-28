@@ -144,13 +144,13 @@ class Model(nn.Module):
         self.fc1_value = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
         self.fc2_value = make_fc_layer(Config.TOKEN_DIM, self.value_head_num)
 
-        # hero frd value
-        self.fc1_frd_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        self.fc2_frd_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
-
-        # hero emy value
-        self.fc1_emy_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        self.fc2_emy_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
+        # # hero frd value
+        # self.fc1_frd_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
+        # self.fc2_frd_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
+        #
+        # # hero emy value
+        # self.fc1_emy_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
+        # self.fc2_emy_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
 
         self.lstm = torch.nn.LSTM(input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size, num_layers=1,
                                   bias=True, batch_first=False, dropout=0, bidirectional=False)
@@ -575,7 +575,7 @@ class Model(nn.Module):
                     label_logits_subtract_max = torch.clamp(
                         _hero_fc_label_result[task_index] - torch.max(
                             _hero_fc_label_result[task_index] - legal_action_flag_list_max_mask, dim=1, keepdim=True
-                        ).values, -boundary, 1)
+                        ).old_values, -boundary, 1)
 
                     label_logits_subtract_max_list.append(label_logits_subtract_max)
 

@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import math
 import time
 import numpy as np
 import torch
@@ -13,6 +14,13 @@ from rl_framework.learner.framework.pytorch.apd_datasets import DataPrefetcher, 
 from rl_framework.learner.framework.pytorch.model_manager import ModelManager
 from rl_framework.learner.framework.pytorch.step_context import StepContext
 from rl_framework.common.logging import logger as LOG
+
+
+# 余弦退火函数，用于更新温度 T
+def cosine_annealing_temperature(T_0, T_min, current_step, total_steps):
+    """计算余弦退火后的温度值"""
+    cos_inner = (math.pi * current_step) / total_steps
+    return T_min + 0.5 * (T_0 - T_min) * (1 + math.cos(cos_inner))
 
 
 class Profiler:
@@ -128,7 +136,13 @@ class Benchmark(object):
                 self.optimizer, self.local_step
             )
         else:
-            self.lr_scheduler = None
+            if self.config_manager.use_lr_decay:
+                self.lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                    self.optimizer,
+                    T_max=self.config_manager.T_max,
+                    eta_min=self.config_manager.lr_end)
+            else:
+                self.lr_scheduler = None
 
         if self.distributed_backend == "horovod" and self.node.has_hvd:
             self.net.to(memory_format=torch.contiguous_format)
@@ -220,17 +234,20 @@ class Benchmark(object):
         else:
             data_list = self.net.format_data(_input_datas)
             rst_list = self.net_wrapper(data_list)
-            total_loss, info_list = self.net.compute_loss(data_list, rst_list)
+            total_loss, info_list, acc_list = self.net.compute_loss(data_list, rst_list)
             results["total_loss"] = total_loss.item()
+            results["acc_list"] = acc_list
             total_loss.backward()
             if (
                     self.distributed_backend == "horovod" and self.node.has_hvd
             ):  # only horovod mode needs
                 self.optimizer.synchronize()
+            results["pre_clip_total_norm"] = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters()]), 2)
             if self.config_manager.use_grad_clip:  # grad clip
                 torch.nn.utils.clip_grad_norm_(
                     self.parameters, self.config_manager.grad_clip_range
                 )
+            results["post_clip_total_norm"] = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters()]), 2)
             if self.local_step % self.config_manager.display_every == 0:
                 step_context.set_forward_info(total_loss, info_list)
                 if self.config_manager.check_values:
@@ -279,6 +296,13 @@ class Benchmark(object):
             batch_duration = time.time() - batch_begin
             profiler.step()
             self.local_step += 1
+            # if self.config_manager.use_T_decay:
+            #     step = self.local_step.item() if isinstance(self.local_step, torch.Tensor) else self.local_step
+            #     step = step - 30 * 10000
+            #     T_0 = self.config_manager.T_0
+            #     T_min = self.config_manager.T_T_min
+            #     self.net.distill_temperature = cosine_annealing_temperature(T_0, T_min, step, 40 * 10000)
+
             if self.local_step % self.config_manager.save_model_steps != 0:
                 self.step_train_times.append(batch_duration)
 
@@ -295,6 +319,20 @@ class Benchmark(object):
                     self.config_manager.batch_size, self.step_train_times
                 )
                 self.log_manager.print_result(results)
+                step = self.local_step.item() if isinstance(self.local_step, torch.Tensor) else self.local_step
+                acc_list = results["acc_list"]
+                if type(acc_list).__name__ == "list":
+                    for idx, v in enumerate(acc_list):
+                        self.log_manager.writer.add_scalar(f'action_accuracy/{idx+1}', v, step)
+                elif type(acc_list).__name__ == "ndarray":
+                    for i in range(acc_list.shape[0]):
+                        for j in range(acc_list.shape[1]):
+                            self.log_manager.writer.add_scalar(
+                                f'action_accuracy/acc_{i+1}_rank_{j+1}', acc_list[i][j], step)
+                pre_clip_total_norm = results["pre_clip_total_norm"]
+                post_clip_total_norm = results["post_clip_total_norm"]
+                self.log_manager.writer.add_scalar(f'total_norm/pre_clip', pre_clip_total_norm, step)
+                self.log_manager.writer.add_scalar(f'total_norm/post_clip', post_clip_total_norm, step)
 
             if (
                     self.local_step % self.config_manager.save_model_steps == 0

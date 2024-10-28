@@ -29,7 +29,6 @@ class ModelConfig:
     HERO_SERI_VEC_SPLIT_SHAPE = [[(6, 17, 17), (VEC_DIM,)]] * HERO_NUM  # (1734 + 2852) * 3
     TOTAL_DIM = int(VEC_DIM + np.prod(HERO_SERI_VEC_SPLIT_SHAPE[0][0]))
 
-
     TARGET_DIM = 1 + HERO_NUM * CAMP_NUM + 1 + MONSTER_NUM + SOLDIER_NUM + 1  # 39
 
     BUTTON_DIM = 13  # [Empty, Empty, Move, Attack, Skill1, ...]
@@ -56,9 +55,9 @@ class ModelConfig:
     print(HERO_LABEL_SIZE_LIST)
 
     ## transformer
-    TOKEN_DIM = 384
-    HEAD_DIM = 384
-    ATT_HEAD_NUM = 6
+    TOKEN_DIM = 224
+    HEAD_DIM = 224
+    ATT_HEAD_NUM = 4
     ATT_LAYER_NUM = 3
     DK_SCALE = 1.0 / (HEAD_DIM ** 0.5)
 
@@ -69,7 +68,7 @@ class ModelConfig:
     ###### NETWORK CONFIG #####
     # lstm
     LSTM_TIME_STEPS = 16
-    LSTM_UNIT_SIZE = 2048
+    LSTM_UNIT_SIZE = 1024
     # target attention
     TARGET_EMBEDDING_DIM = 64
     # value
@@ -79,9 +78,6 @@ class ModelConfig:
     ###### LOSS CONFIG #####
     INIT_LEARNING_RATE_START = 0.0002
     BETA_START = 0.008
-    RMSPROP_DECAY = 0.9
-    RMSPROP_MOMENTUM = 0.0
-    RMSPROP_EPSILON = 0.01
     CLIP_PARAM = 0.2
     MIN_POLICY = 0.00001
 

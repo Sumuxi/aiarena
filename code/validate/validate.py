@@ -68,7 +68,7 @@ def check(output_bin_0, output_bin_1):
     rate_1 = sum(rates_1)/len(rates_1)
     rate_2 = sum(rates_2)/len(rates_2)
     print("top1({:.2%}) top2({:.2%})".format(rate_1, rate_2))
-
+    print(rate_1, rate_2)
     if rate_1 < 0.9 or rate_2 < 0.9:
         return False
     return True

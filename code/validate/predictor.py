@@ -7,7 +7,7 @@ import onnxruntime as ort
 class Predictor:
     def __init__(self) -> None:
         # custom config for the model
-        self.lstm_unit_size = 2048
+        self.lstm_unit_size = 1024
 
     def reset(self, model_path=None):
         # load ckpt
@@ -17,7 +17,8 @@ class Predictor:
             session_options.inter_op_num_threads = 1
 
             self.ort_sess = ort.InferenceSession(
-                os.path.join(model_path, "3v3.onnx"),
+                # os.path.join(model_path, "3v3.onnx"),
+                model_path,
                 session_options,
                 providers=["CPUExecutionProvider"],
             )
@@ -42,8 +43,8 @@ class Predictor:
             "feature_hero0": features[0].astype(self.dtype),
             "feature_hero1": features[1].astype(self.dtype),
             "feature_hero2": features[2].astype(self.dtype),
-            "lstm_cell_in": self.lstm_cell.astype(self.dtype),
-            "lstm_hidden_in": self.lstm_hidden.astype(self.dtype),
+            # "lstm_cell_in": self.lstm_cell.astype(self.dtype),
+            # "lstm_hidden_in": self.lstm_hidden.astype(self.dtype),
         }
 
         # predict

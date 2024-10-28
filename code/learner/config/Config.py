@@ -1,3 +1,4 @@
+import math
 import os
 import numpy as np
 
@@ -23,7 +24,7 @@ class Config:
     DISTILL_WEIGHT = float(get_env("distill_weight"))
     FILE_CNT = int(get_env("file_cnt"))
 
-    DISTILL_TEMPERATURE = 10
+    DISTILL_TEMPERATURE = 4
     DISTILL_LAMBDA_WEIGHT = 0.5
 
     CAMP_NUM = 2

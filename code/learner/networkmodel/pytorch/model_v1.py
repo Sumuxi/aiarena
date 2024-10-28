@@ -15,8 +15,6 @@ from ctypes import Union
 from config.Config import Config
 from config.DimConfig import DimConfig
 
-import sys
-
 
 # level6, V1 模型，来自23年工程赛道
 ##################
@@ -223,7 +221,7 @@ class NetworkModel(nn.Module):
             # soldier_share
             soldier_frd_mlp_out = self.soldier_mlp(_soldier_1_10)
             soldier_frd_fc_out = self.soldier_frd_fc(soldier_frd_mlp_out)
-            # torch.max returns both the max values and the argmax indices
+            # torch.max returns both the max old_values and the argmax indices
             pool_frd_soldier, _ = soldier_frd_fc_out.max(dim=1)
 
             soldier_emy_mlp_out = self.soldier_mlp(_soldier_11_20)
@@ -258,46 +256,6 @@ class NetworkModel(nn.Module):
             # individual encoding
             hero_public_second_result_list.append(hero_public_result[1])
 
-            # torch.set_printoptions(threshold=torch.inf, linewidth=60)  # 设置PyTorch打印选项
-            # # torch.set_printoptions(threshold=torch.inf, linewidth=60, sci_mode=True)
-
-            # # 将打印输出重定向到文件
-            # with open('/workspace/yxh_aiarena/output/heros/hero_'+ str(hero_index) +'_feature.txt', 'w') as f:
-            #     sys.stdout = f  # 将标准输出重定向到文件
-                
-            #     print('特征图(1734维): ')
-            #     print('_feature_img[16]: ')
-            #     print(_feature_img[16])
-
-            #     print('\n')
-            #     print('特征向量(2852维): ')
-            #     print('_feature_vec[16]: ')
-            #     print(_feature_vec[16])
-
-            #     print('\n')
-            #     print('细分特征向量: ')
-            #     print('_hero_frd[16]: ')
-            #     print(_hero_frd[16])
-            #     print('_hero_emy[16]: ')
-            #     print(_hero_emy[16])
-            #     print('hero_main[16]: ')
-            #     print(hero_main[16])
-            #     print('_soldier_1_10[16]: ')
-            #     print(_soldier_1_10[16])
-            #     print('_soldier_11_20[16]: ')
-            #     print(_soldier_11_20[16])
-            #     print('_organ_1_3[16]: ')
-            #     print(_organ_1_3[16])
-            #     print('_organ_4_6[16]: ')
-            #     print(_organ_4_6[16])
-            #     print('_monster_1_20[16]: ')
-            #     print(_monster_1_20[16])
-            #     print('global_info[16]: ')
-            #     print(global_info[16])
-
-            #     # 恢复标准输出
-            #     sys.stdout = sys.__stdout__
-
         pool_hero_public, _ = torch.stack(hero_public_first_result_list, dim=1).max(dim=1)
 
         for hero_index in range(self.hero_num):
@@ -331,7 +289,7 @@ class NetworkModel(nn.Module):
             loss = loss + cost_p_label_list[i]
         return loss, cost_p_label_list
 
-    def _calculate_single_hero_soft_loss(self, student_logits_list, teacher_logits_list, unsqueeze_weight_list):
+    def _calculate_single_hero_soft_loss(self, student_logits_list, teacher_probs_list, unsqueeze_weight_list):
         weight_list = []
         for weight in unsqueeze_weight_list:
             weight_list.append(torch.squeeze(weight, dim=1))
@@ -339,8 +297,8 @@ class NetworkModel(nn.Module):
         cost_p_label_list = []
         for i in range(len(student_logits_list)):
             weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
-            # Calculate soft label loss   这里没有考虑温度，没有升温
-            teacher_probs = F.softmax(teacher_logits_list[i], dim=1)
+            # Calculate soft label loss
+            teacher_probs = teacher_probs_list[i]
             soft_label_loss = F.cross_entropy(student_logits_list[i], teacher_probs, reduction='none')
             label_final_loss = torch.mean(weight * soft_label_loss)
             cost_p_label_list.append(label_final_loss)
@@ -369,7 +327,6 @@ class NetworkModel(nn.Module):
             # Calculate soft label loss
             student_logits_temperature = student_logits_list[i] / temperature
             teacher_logits_temperature = teacher_logits_list[i] / temperature
-            # student_probs = F.softmax(student_logits_temperature, dim=1)#学生要不要做softmax？
             teacher_probs = F.softmax(teacher_logits_temperature, dim=1)
 
             soft_label_loss = F.cross_entropy(student_logits_temperature, teacher_probs, reduction='none')
@@ -378,6 +335,81 @@ class NetworkModel(nn.Module):
             # Combine the hard and soft label losses with the specified weight
             final_loss = (1 - lambda_weight) * hard_label_final_loss + (
                         temperature ** 2) * lambda_weight * soft_label_final_loss
+
+            cost_p_label_list.append(final_loss)
+
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_distill_loss_2(self, unsqueeze_label_list, student_logits_list, teacher_probs_list,
+                                            unsqueeze_weight_list, temperature=4.0, lambda_weight=0.5):
+        label_list = [torch.squeeze(ele, dim=1).long() for ele in unsqueeze_label_list]
+        weight_list = [torch.squeeze(weight, dim=1) for weight in unsqueeze_weight_list]
+
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != 0).float()
+
+            # Calculate hard label loss
+            hard_label_loss = F.cross_entropy(student_logits_list[i], label_list[i], reduction='none')
+            hard_label_final_loss = torch.mean(weight * hard_label_loss)
+
+            # Calculate soft label loss
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_probs_temperature = teacher_probs_list[i]  # Teacher probabilities
+
+            # Apply temperature scaling to the teacher probabilities
+            teacher_probs_scaled = teacher_probs_temperature ** (1 / temperature)
+            teacher_probs_scaled /= torch.sum(teacher_probs_scaled, dim=1, keepdim=True)
+
+            # 计算每个样本的损失
+            soft_label_loss = F.kl_div(F.log_softmax(student_logits_temperature, dim=1), teacher_probs_scaled, reduction='none')
+            # 通过对类别维度进行求和或均值来得到每个样本的损失
+            soft_label_loss = soft_label_loss.sum(dim=1)  # 或使用 .mean(dim=1)
+
+            soft_label_final_loss = torch.mean(weight * soft_label_loss)
+
+            # Combine losses
+            final_loss = (1 - lambda_weight) * hard_label_final_loss + (temperature ** 2) * lambda_weight * soft_label_final_loss
+
+            cost_p_label_list.append(final_loss)
+
+        loss = torch.sum(torch.stack(cost_p_label_list))
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_distill_loss_3(self, unsqueeze_label_list, student_logits_list, teacher_probs_list,
+                                            unsqueeze_weight_list, temperature=4.0, lambda_weight=0.5):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+
+            # Calculate hard label loss
+            hard_label_loss = F.cross_entropy(student_logits_list[i], label_list[i], reduction='none')
+            hard_label_final_loss = torch.mean(weight * hard_label_loss)
+
+            # Calculate soft label loss
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_probs_temperature = teacher_probs_list[i]  # Teacher probabilities
+
+            # Apply temperature scaling to the teacher probabilities
+            teacher_probs_scaled = teacher_probs_temperature ** (1 / temperature)
+            teacher_probs_scaled /= torch.sum(teacher_probs_scaled, dim=1, keepdim=True)
+
+            soft_label_loss = F.cross_entropy(student_logits_temperature, teacher_probs_scaled, reduction='none')
+            soft_label_final_loss = torch.mean(weight * soft_label_loss)
+
+            # Combine the hard and soft label losses with the specified weight
+            final_loss = (1 - lambda_weight) * hard_label_final_loss + (
+                    temperature ** 2) * lambda_weight * soft_label_final_loss
 
             cost_p_label_list.append(final_loss)
 
@@ -414,8 +446,7 @@ class NetworkModel(nn.Module):
             data_index += 1
 
             # sub_action # npz 最后5列, {list:5} = [(512,1),(512,1),(512,1),(512,1),(512,1)]
-            this_hero_weight_list = data_list[hero_index][
-                                    data_index:(data_index + this_hero_label_task_count)]
+            this_hero_weight_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
             data_index += this_hero_label_task_count  # originally (task_num + 1)
 
             # policy network output #{list:5} = [(512,13),(512,25),(512,42),(512,42),(512,39)]
@@ -434,73 +465,31 @@ class NetworkModel(nn.Module):
                                                                              this_hero_probability_list,
                                                                              this_hero_weight_list)
 
-            # distill loss
+            # distill loss (NOT READY FOR USE)
+            # this_hero_target_logits_list = this_hero_probability_list  # TODO: should replace with logits from teacher
+            # 通过对概率值取对数（torch.log），可以得到相应的logits
+            # 使用torch.clamp函数将概率值限定在一个较小的最小值（如1e-8）以上，确保对数运算的安全性。
+            # this_hero_target_logits_list = [torch.log(torch.clamp(prob, min=1e-8)) for prob in this_hero_probability_list]
+
             this_hero_distill_loss_list = self._calculate_single_hero_distill_loss(this_hero_action_list,
-                                                                                   this_hero_fc_label_list,
-                                                                                   this_hero_probability_list,
-                                                                                   this_hero_weight_list,
-                                                                                   temperature=Config.DISTILL_TEMPERATURE, 
-                                                                                   lambda_weight=Config.DISTILL_LAMBDA_WEIGHT)
+                                                                                     this_hero_fc_label_list,
+                                                                                     this_hero_probability_list,
+                                                                                     this_hero_weight_list,
+                                                                                     temperature=Config.DISTILL_TEMPERATURE,
+                                                                                     lambda_weight=Config.DISTILL_LAMBDA_WEIGHT)
 
             cost_all = cost_all + \
-                            Config.HARD_WEIGHT * this_hero_hard_loss_list[0] + \
-                            Config.SOFT_WEIGHT * this_hero_soft_loss_list[0] + \
-                            Config.DISTILL_WEIGHT * this_hero_distill_loss_list[0] + \
-                            0.0 * torch.sum(this_hero_value)  # loss item (scalar)
+                       Config.HARD_WEIGHT * this_hero_hard_loss_list[0] + \
+                       Config.SOFT_WEIGHT * this_hero_soft_loss_list[0] + \
+                       Config.DISTILL_WEIGHT * this_hero_distill_loss_list[0] + \
+                       0.0 * torch.sum(this_hero_value)  # loss item (scalar)
             all_hero_loss_list.append(
                 [this_hero_hard_loss_list[0], this_hero_soft_loss_list[0], this_hero_distill_loss_list[0]]
             )
-
         return cost_all, [[all_hero_loss_list[0][0], all_hero_loss_list[0][1], all_hero_loss_list[0][2]],
                           [all_hero_loss_list[1][0], all_hero_loss_list[1][1], all_hero_loss_list[1][2]],
                           [all_hero_loss_list[2][0], all_hero_loss_list[2][1], all_hero_loss_list[2][2]]]
 
-    def compute_valid_loss(self, data_list, rst_list):
-        cost_all = torch.tensor(0.0, dtype=torch.float32)
-        all_hero_loss_list = []
-        for hero_index in range(len(data_list)):
-            this_hero_label_task_count = len(self.hero_label_size_list[hero_index]) # 5
-            data_index = 1
-
-            # legal action
-            data_index += this_hero_label_task_count
-
-            # reward
-            data_index += 1
-
-            # advantage
-            data_index += 1
-
-            # action (label) # npz 8~12列, {list:5} = [(512,1),(512,1),(512,1),(512,1),(512,1)]
-            this_hero_action_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
-            data_index += this_hero_label_task_count
-
-            # action (prob lists, each corresponds to a sub-task) # npz 13~17列, {list:5} = [(512,13),(512,25),(512,42),(512,42),(512,39)]
-            this_hero_probability_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
-            data_index += this_hero_label_task_count
-
-            # is_train
-            data_index += 1
-
-            # sub_action # npz 最后5列, {list:5} = [(512,1),(512,1),(512,1),(512,1),(512,1)]
-            this_hero_weight_list = data_list[hero_index][
-                                    data_index:(data_index + this_hero_label_task_count)]
-            data_index += this_hero_label_task_count  # originally (task_num + 1)
-
-            # policy network output #{list:5} = [(512,13),(512,25),(512,42),(512,42),(512,39)]
-            this_hero_fc_label_list = rst_list[hero_index][:-1]
-
-            # value network output #(512,1)
-            this_hero_value = rst_list[hero_index][-1]
-
-            # hard label loss
-            this_hero_hard_loss_list = self._calculate_single_hero_hard_loss(this_hero_action_list,
-                                                                             this_hero_fc_label_list,
-                                                                             this_hero_weight_list)
-            
-            cost_all = cost_all + this_hero_hard_loss_list[0]
-
-        return cost_all
 
     def format_data(self, datas):
         datas = datas.view(-1, self.hero_num, self.hero_data_len)
@@ -517,6 +506,9 @@ class NetworkModel(nn.Module):
                 hero_sequence_data_split_shape, dim=1)
             reshape_sequence_data = sequence_data.reshape(-1, hero_each_frame_data_length)
             hero_data = reshape_sequence_data.split(self.hero_data_split_shape[hero_index], dim=1)
+            hero_data = list(hero_data)  # convert from tuple to list
+            hero_data.append(lstm_cell_data)
+            hero_data.append(lstm_hidden_data)
             hero_data_list.append(hero_data)
         return hero_data_list
 

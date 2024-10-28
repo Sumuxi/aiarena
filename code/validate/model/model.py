@@ -575,7 +575,7 @@ class Model(nn.Module):
                     label_logits_subtract_max = torch.clamp(
                         _hero_fc_label_result[task_index] - torch.max(
                             _hero_fc_label_result[task_index] - legal_action_flag_list_max_mask, dim=1, keepdim=True
-                        ).values, -boundary, 1)
+                        ).old_values, -boundary, 1)
 
                     label_logits_subtract_max_list.append(label_logits_subtract_max)
 

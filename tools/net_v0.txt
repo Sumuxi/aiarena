@@ -1,0 +1,92 @@
+NetworkModel(
+  (conv_layers): Sequential(
+    (img_feat_conv1): Conv2d(6, 18, kernel_size=(5, 5), stride=(1, 1), padding=(2, 2))
+    (img_feat_relu1): ReLU()
+    (img_feat_maxpool1): MaxPool2d(kernel_size=3, stride=2, padding=0, dilation=1, ceil_mode=False)
+    (img_feat_conv2): Conv2d(18, 6, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+  )
+  (fc1_img): Linear(in_features=64, out_features=224, bias=True)
+  (hero_mlp): MLP(
+    (fc_layers): Sequential(
+      (hero_mlp_fc1): Linear(in_features=251, out_features=1024, bias=True)
+      (hero_mlp_non_linear1): ReLU()
+      (hero_mlp_fc2): Linear(in_features=1024, out_features=1024, bias=True)
+      (hero_mlp_non_linear2): ReLU()
+      (hero_mlp_fc3): Linear(in_features=1024, out_features=224, bias=True)
+    )
+  )
+  (hero_main_mlp): MLP(
+    (fc_layers): Sequential(
+      (hero_main_mlp_fc1): Linear(in_features=44, out_features=256, bias=True)
+      (hero_main_mlp_non_linear1): ReLU()
+      (hero_main_mlp_fc2): Linear(in_features=256, out_features=256, bias=True)
+      (hero_main_mlp_non_linear2): ReLU()
+      (hero_main_mlp_fc3): Linear(in_features=256, out_features=224, bias=True)
+    )
+  )
+  (monster_mlp): MLP(
+    (fc_layers): Sequential(
+      (monster_mlp_fc1): Linear(in_features=28, out_features=256, bias=True)
+      (monster_mlp_non_linear1): ReLU()
+      (monster_mlp_fc2): Linear(in_features=256, out_features=256, bias=True)
+      (monster_mlp_non_linear2): ReLU()
+      (monster_mlp_fc3): Linear(in_features=256, out_features=224, bias=True)
+    )
+  )
+  (soldier_mlp): MLP(
+    (fc_layers): Sequential(
+      (soldier_mlp_fc1): Linear(in_features=25, out_features=256, bias=True)
+      (soldier_mlp_non_linear1): ReLU()
+      (soldier_mlp_fc2): Linear(in_features=256, out_features=256, bias=True)
+      (soldier_mlp_non_linear2): ReLU()
+      (soldier_mlp_fc3): Linear(in_features=256, out_features=224, bias=True)
+    )
+  )
+  (organ_mlp): MLP(
+    (fc_layers): Sequential(
+      (organ_mlp_fc1): Linear(in_features=29, out_features=256, bias=True)
+      (organ_mlp_non_linear1): ReLU()
+      (organ_mlp_fc2): Linear(in_features=256, out_features=256, bias=True)
+      (organ_mlp_non_linear2): ReLU()
+      (organ_mlp_fc3): Linear(in_features=256, out_features=224, bias=True)
+    )
+  )
+  (global_mlp): MLP(
+    (fc_layers): Sequential(
+      (global_mlp_fc1): Linear(in_features=68, out_features=256, bias=True)
+      (global_mlp_non_linear1): ReLU()
+      (global_mlp_fc2): Linear(in_features=256, out_features=256, bias=True)
+      (global_mlp_non_linear2): ReLU()
+      (global_mlp_fc3): Linear(in_features=256, out_features=224, bias=True)
+    )
+  )
+  (encoder): ModuleList(
+    (0-2): 3 x MultiHeadAttention(
+      (w_qs): Linear(in_features=224, out_features=896, bias=True)
+      (w_ks): Linear(in_features=224, out_features=896, bias=True)
+      (w_vs): Linear(in_features=224, out_features=896, bias=True)
+      (fc1): Linear(in_features=896, out_features=896, bias=True)
+      (fc2): Linear(in_features=896, out_features=224, bias=True)
+      (attention): ScaledDotProductAttention()
+    )
+  )
+  (fc1_public): MLP(
+    (fc_layers): Sequential(
+      (fc1_public_fc1): Linear(in_features=224, out_features=1024, bias=True)
+      (fc1_public_non_linear1): ReLU()
+    )
+  )
+  (fc1_label): Linear(in_features=1024, out_features=224, bias=True)
+  (fc2_label_list): ModuleList(
+    (0): Linear(in_features=224, out_features=13, bias=True)
+    (1): Linear(in_features=224, out_features=25, bias=True)
+    (2-3): 2 x Linear(in_features=224, out_features=42, bias=True)
+  )
+  (fc1_target): Linear(in_features=1024, out_features=224, bias=True)
+  (fc2_target): Linear(in_features=224, out_features=64, bias=True)
+  (fc1_target_token): Linear(in_features=224, out_features=64, bias=True)
+  (fc2_target_token): Linear(in_features=64, out_features=64, bias=False)
+  (fc1_value): Linear(in_features=1024, out_features=224, bias=True)
+  (fc2_value): Linear(in_features=224, out_features=1, bias=True)
+  (lstm): LSTM(1024, 1024)
+)

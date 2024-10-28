@@ -12,10 +12,16 @@ from config.Config import Config
 from absl import flags
 
 FLAGS = flags.FLAGS
-flags.DEFINE_boolean("single_test", 0, "test_mode")
 flags.DEFINE_string("exp_name", "test", "experiment name")  # 指定本次实验的名称，方便保存相关文件到对应的目录
 flags.DEFINE_integer("local_rank", 0, "local_rank")
 flags.DEFINE_string("model_file", "NetworkModel", "model file name")  # 指定模型文件名（不带后缀）
+flags.DEFINE_integer("batch_size", 32, "batch size")
+flags.DEFINE_integer("temperature", 4, "distill_temperature")
+flags.DEFINE_float("lambda_weight", 0.5, "distill_lambda_weight")
+flags.DEFINE_integer("lr_decay", 0, "whether use learning rate decay")
+flags.DEFINE_float("lr_start", 0.0002, "start learning rate")
+flags.DEFINE_integer("T_max", 20*10000, "T_max")
+flags.DEFINE_float("lr_end", 0.00001, "end learning rate")
 
 
 def load_class(module_name, class_name):
@@ -37,6 +43,13 @@ def main(argv):
     config_manager.save_model_dir = os.path.join(exp_save_dir, "ckpt")
     config_manager.train_dir = os.path.join(exp_save_dir, "logs/learner")
     config_manager.send_model_dir = os.path.join(exp_save_dir, "backup_model")
+    config_manager.batch_size = FLAGS.batch_size
+    Config.DISTILL_TEMPERATURE = FLAGS.temperature
+    Config.DISTILL_LAMBDA_WEIGHT = FLAGS.lambda_weight
+    config_manager.lr_start = FLAGS.lr_start
+    config_manager.T_max = FLAGS.T_max
+    config_manager.lr_end = FLAGS.lr_end
+    config_manager.use_lr_decay = FLAGS.lr_decay
 
     os.makedirs(config_manager.save_model_dir, exist_ok=True)
     os.makedirs(config_manager.train_dir, exist_ok=True)
@@ -49,9 +62,6 @@ def main(argv):
         from rl_framework.learner.framework.pytorch.model_manager import ModelManager
         from rl_framework.learner.dataset.network_dataset.pytorch.network_dataset_local import (
             NetworkDataset as NetworkDatasetLocal,
-        )
-        from rl_framework.learner.dataset.network_dataset.pytorch.network_dataset_random import (
-            NetworkDataset as NetworkDatasetRandom,
         )
         from rl_framework.learner.framework.pytorch.apd_benchmark import Benchmark
         # from networkmodel.pytorch.model_v4 import NetworkModel
@@ -73,21 +83,15 @@ def main(argv):
     node_info = NodeInfo(rank=FLAGS.local_rank, rank_size=8, local_rank=FLAGS.local_rank, local_size=8)
     adapter = OfflineRlInfoAdapter(Config.data_shapes)
     config_manager.push_to_modelpool = False
-    if FLAGS.single_test:
-        dataset = NetworkDatasetRandom(
-            config_manager,
-            adapter,
-        )
-    else:
-        dataset = NetworkDatasetLocal(
-            config_manager,
-            adapter,
-            npz_directory="/dataset/train",
-            file_cnt=Config.FILE_CNT,
-        )
-
+    dataset = NetworkDatasetLocal(
+        config_manager,
+        adapter,
+        npz_directory="/aiarena/dataset/train_with_logits",
+        file_cnt=Config.FILE_CNT,
+    )
     log_manager = LogManager(loss_file_path=os.path.join(config_manager.train_dir, "loss.txt"), backend="pytorch")
     network = NetworkModel()
+    network.learning_rate = config_manager.lr_start
     model_manager = ModelManager(config_manager.push_to_modelpool, save_interval=0)
     benchmark = Benchmark(
         network,
