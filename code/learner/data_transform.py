@@ -12,7 +12,7 @@ from networkmodel.pytorch.NetworkModel import NetworkModel
 """
 
 parser = argparse.ArgumentParser(description='')
-parser.add_argument('--id', type=str, default='2', help='')
+parser.add_argument('--id', type=str, default='0', help='')
 args = parser.parse_args()
 
 id = int(args.id)
@@ -33,7 +33,7 @@ batch_size = 200
 device = "cuda:" + str(id)
 
 net = NetworkModel()
-state_dict = torch.load("/mnt/storage/yxh/competition24/lightweight/assets/baseline/model.pth", map_location="cpu")
+state_dict = torch.load("/mnt/storage/yxh/competition24/lightweight/aiarena/code/assets/baseline/model.pth", map_location="cpu")
 missing_keys, unexpected_keys = net.load_state_dict(state_dict["network_state_dict"], strict=True)
 print(f"missing_keys: {missing_keys}")
 print(f"unexpected_keys: {unexpected_keys}")
@@ -170,8 +170,8 @@ with torch.no_grad():
                 out_arr = net.convert_to_datas(data_list)
                 results.append(out_arr.cpu().numpy())
 
-            result_ndarray = np.concatenate(results, axis=0)
-            file_name = os.path.join(new_npz_directory, npz)
-            np.savez_compressed(file_name, samples=result_ndarray)
-            print(f"saved {npz}, data shape is {result_ndarray.shape}")
+            # result_ndarray = np.concatenate(results, axis=0)
+            # file_name = os.path.join(new_npz_directory, npz)
+            # np.savez_compressed(file_name, samples=result_ndarray)
+            # print(f"saved {npz}, data shape is {result_ndarray.shape}")
             numpy_data.close()

@@ -12,7 +12,7 @@ os.makedirs(save_path, exist_ok=True)
 # exps_to_draw = ['f1e1','f1e2','f2e2','f3e1', 'f3e2', 'f3e3','f4e2']
 # exps_to_draw = ['f3e1', 'f3e2', 'f3e3']
 # exps_to_draw = ['f1e1', 'f2e1', 'f3e1', 'f4e1', 'v15e30']
-exps_to_draw = ['f1e1', 'f3e1', 'f3e3', 'v15e30']
+exps_to_draw = ['f1e1', 'f3e1', 'f3e3']
 
 win_rate_dict = [
     {

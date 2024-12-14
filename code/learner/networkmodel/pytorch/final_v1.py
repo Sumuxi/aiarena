@@ -330,7 +330,7 @@ class NetworkModel(nn.Module):
 
             # 计算 KL 散度，log_target=True 表示教师模型的目标已是 log 概率
             kl_div_loss = F.kl_div(student_probs_log, teacher_probs_log, reduction='none', log_target=True)
-            # 通过对类别维度进行求和或均值来得到每个样本的损失
+            # 通过对类别维度进行求和来得到每个样本的损失
             kl_div_loss = kl_div_loss.sum(dim=1)  # 或使用 .mean(dim=1)
 
             soft_label_final_loss = torch.mean(weight * kl_div_loss)
