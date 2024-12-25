@@ -1,34 +1,26 @@
-import torch                            # in place of tensorflow
+import torch
 import torch.nn as nn                   # for builtin modules including Linear, Conv2d, MultiheadAttention, LayerNorm, etc
 import torch.nn.functional as F
-from torch.nn import ModuleDict         # for layer naming when nn.Sequential is not viable
-import numpy as np                      # for some basic dimention computation, might be redundent
+import numpy as np                      # for some basic dimension computation, might be redundant
 
 from math import ceil, floor
-from collections import OrderedDict
 
 # typing
-from torch import Tensor, LongTensor
 from typing import Dict, List, Tuple
 from ctypes import Union
 
-from config.model_config import ModelConfig as Config
+from config.Config import Config
+
 
 
 ##################
 ## Actual model ##
 ##################
-class Model(nn.Module):
-    def __init__(self, ModelConfig):
-        super(Model, self).__init__()
-        # feature configure parameter
-        self.model_name = Config.NETWORK_NAME
-
-        # build onnx
-        self.build_onnx = False
-
+class NetworkModel(nn.Module):
+    def __init__(self):
+        super(NetworkModel, self).__init__()
         # lstm
-        self.lstm_time_steps = 1  # for inference
+        self.lstm_time_steps = Config.LSTM_TIME_STEPS
         self.lstm_unit_size = Config.LSTM_UNIT_SIZE
         self.lstm_size = Config.LSTM_UNIT_SIZE
 
@@ -58,7 +50,12 @@ class Model(nn.Module):
         self.hero_num = 3
         self.hero_data_len = sum(Config.data_shapes[0])
 
-        # self.pos_lstm_unit_size = Config.POS_LSTM_UNIT_SIZE
+        # loss weights
+        coefficients = {"hard loss weight": Config.HARD_WEIGHT,
+                        "soft loss weight": Config.SOFT_WEIGHT,
+                        "distill loss weight": Config.DISTILL_WEIGHT}
+        for k, v in coefficients.items():
+            print(f"{k}: {v}")
 
         # build network
         kernel_size_list = [(5, 5), (3, 3)]
@@ -83,7 +80,7 @@ class Model(nn.Module):
                 self.conv_layers.add_module("img_feat_relu{0}".format(i + 1), nn.ReLU())
                 self.conv_layers.add_module("img_feat_maxpool{0}".format(i + 1), nn.MaxPool2d(3, 2))
         '''share'''
-        self.fc1_img = make_fc_layer(8 * 8, Config.TOKEN_DIM)  # NOTE: USE relu or not?
+        self.fc1_img = make_fc_layer(8 * 8, Config.TOKEN_DIM)
 
         ''' hero_share module'''
         fc_hero_dim_list = [Config.HERO_DIM, 1024, 1024, Config.TOKEN_DIM]
@@ -122,7 +119,7 @@ class Model(nn.Module):
         self.fc1_public = MLP([Config.TOKEN_DIM, self.lstm_unit_size], "fc1_public",
                               non_linearity_last=True)  # add relu
 
-        self.fc1_label = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)  # NOTE: USE relu or not?
+        self.fc1_label = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
 
         self.fc2_label_list = []
 
@@ -133,10 +130,10 @@ class Model(nn.Module):
         self.fc2_label_list = nn.ModuleList(self.fc2_label_list)
 
         # target attention
-        self.fc1_target = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)  # NOTE: USE relu or not?
-        self.fc2_target = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)  # NOTE: USE relu or not?
+        self.fc1_target = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
+        self.fc2_target = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)
 
-        self.fc1_target_token = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)  # NOTE: USE relu or not?
+        self.fc1_target_token = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)
         self.fc2_target_token = make_fc_layer(self.target_embedding_dim, self.target_embedding_dim,
                                               use_bias=False)
 
@@ -144,35 +141,12 @@ class Model(nn.Module):
         self.fc1_value = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
         self.fc2_value = make_fc_layer(Config.TOKEN_DIM, self.value_head_num)
 
-        # # hero frd value
-        # self.fc1_frd_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        # self.fc2_frd_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
-        #
-        # # hero emy value
-        # self.fc1_emy_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        # self.fc2_emy_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
-
         self.lstm = torch.nn.LSTM(input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size, num_layers=1,
                                   bias=True, batch_first=False, dropout=0, bidirectional=False)
         # self.lstm = LSTMCell(input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size, batch_first=False,
         #                      forget_bias=1.)
 
-        # I/O placeholder
-        self.probs_h0 = None
-        self.probs_h1 = None
-        self.probs_h2 = None
-        self.lstm_cell = None
-        self.lstm_hidden = None
-        self.lstm_cell_output = None
-        self.lstm_hidden_output = None
-
-    def forward(self, data_list, data_list_with_label=None, inference=False):
-        if self.build_onnx:
-            data_list = self.format_data(data_list)
-
-        if data_list_with_label is not None:
-            data_list_with_label = self.format_data_with_label(data_list_with_label)
-
+    def forward(self, data_list):
         each_hero_data_list = data_list
 
         all_hero_target_token_list = []
@@ -181,15 +155,12 @@ class Model(nn.Module):
         temp_lstm_cell_list = []
         temp_lstm_hidden_list = []
 
-        for hero_index, hero_data in enumerate(data_list):  # is the shape of data_list = (time, bs, fea_dim)  ?
-            if not inference:
-                hero_feature = hero_data[0]
-            else:
-                hero_feature = hero_data
+        for hero_index, hero_data in enumerate(data_list):
+            hero_feature = hero_data[0]  # ([512, 4586])  实际batch_size = 32，此处 bs = 32 * 16帧 = 512
 
             img_fet_dim = np.prod(self.hero_seri_vec_split_shape[hero_index][0])  # 6 x 17 x 17 = 1734
             vec_fet_dim = np.prod(self.hero_seri_vec_split_shape[hero_index][1])  # 2852
-
+            # ([bs, 1734]), ([bs, 2852])
             feature_img, feature_vec = hero_feature.split([img_fet_dim, vec_fet_dim], dim=1)  # (bs, tot_fea_dim)
 
             feature_img_shape = list(self.hero_seri_vec_split_shape[0][0])  # (c, h, w)
@@ -197,12 +168,12 @@ class Model(nn.Module):
             feature_vec_shape = list(self.hero_seri_vec_split_shape[0][1])
             feature_vec_shape.insert(0, -1)
 
-            _feature_img = feature_img.reshape(feature_img_shape)
-            _feature_vec = feature_vec.reshape(feature_vec_shape)
+            _feature_img = feature_img.reshape(feature_img_shape)  # ([bs, 6, 17, 17])
+            _feature_vec = feature_vec.reshape(feature_vec_shape)  # ([bs, 2852])
 
-            # lstm_index = len(hero_data)
-            # temp_lstm_cell_list.append(hero_data[lstm_index - 2])
-            # temp_lstm_hidden_list.append(hero_data[lstm_index - 1])
+            lstm_index = len(hero_data)
+            temp_lstm_cell_list.append(hero_data[lstm_index - 2])
+            temp_lstm_hidden_list.append(hero_data[lstm_index - 1])
 
             hero_dim = int(Config.HERO_NUM * Config.HERO_DIM * Config.CAMP_NUM)
             main_dim = int(Config.MAIN_HERO_DIM)
@@ -215,47 +186,44 @@ class Model(nn.Module):
             split_feature_vec = _feature_vec.split([
                 hero_dim, main_dim, soldier_dim, soldier_dim,
                 organ_dim, organ_dim, monster_dim, global_info_dim,
-            ], dim=1)
+            ], dim=1)  # [1506, 44, 250, 250, 87, 87, 560, 68]
 
-            hero_tensor = split_feature_vec[0].reshape(-1, Config.HERO_NUM * Config.CAMP_NUM, Config.HERO_DIM)
-            main_tensor = split_feature_vec[1].reshape(-1, 1, Config.MAIN_HERO_DIM)
+            hero_tensor = split_feature_vec[0].reshape(-1, Config.HERO_NUM * Config.CAMP_NUM, Config.HERO_DIM)  # ([bs, 6, 251])
+            main_tensor = split_feature_vec[1].reshape(-1, 1, Config.MAIN_HERO_DIM)  # ([bs, 1, 44])
 
             # pos_tensor = split_feature_vec[2]
             frd_soldier_tensor = split_feature_vec[2].reshape(-1, Config.SOLDIER_NUM, Config.SOLDIER_DIM)
             emy_soldier_tensor = split_feature_vec[3].reshape(-1, Config.SOLDIER_NUM, Config.SOLDIER_DIM)
 
-            soldier_tensor_list = [frd_soldier_tensor, emy_soldier_tensor]
+            soldier_tensor_list = [frd_soldier_tensor, emy_soldier_tensor]  # ([bs, 10, 25]), ([bs, 10, 25])
 
             frd_organ_tensor = split_feature_vec[4].reshape(-1, Config.ORGAN_NUM, Config.ORGAN_DIM)
             emy_organ_tensor = split_feature_vec[5].reshape(-1, Config.ORGAN_NUM, Config.ORGAN_DIM)
 
-            organ_tensor_list = [frd_organ_tensor, emy_organ_tensor]
+            organ_tensor_list = [frd_organ_tensor, emy_organ_tensor]  # ([bs, 3, 29]), ([bs, 3, 29])
 
-            monster_tensor = split_feature_vec[6].reshape(-1, Config.MONSTER_NUM, Config.MONSTER_DIM)
-            global_tensor = split_feature_vec[7].reshape(-1, 1, Config.GLOBAL_DIM)
+            monster_tensor = split_feature_vec[6].reshape(-1, Config.MONSTER_NUM, Config.MONSTER_DIM)  # ([bs, 20, 28])
+            global_tensor = split_feature_vec[7].reshape(-1, 1, Config.GLOBAL_DIM)  # ([bs, 1, 68])
 
             this_hero_target_token_list = []
             this_hero_token_list = []
 
-            conv2_result = self.conv_layers(_feature_img)
+            conv2_result = self.conv_layers(_feature_img)  # (bs, 6, 8, 8)
 
             # fc
             dim = np.prod(conv2_result.shape[2:])
 
-            conv2_result_reshape = conv2_result.reshape(-1, self.img_channel, dim)
+            conv2_result_reshape = conv2_result.reshape(-1, self.img_channel, dim)  # (bs, 6, 64)
 
-            img_token = self.fc1_img(conv2_result_reshape)
+            img_token = self.fc1_img(conv2_result_reshape)  # (bs, 6, 224)
 
             # [bs, img_channel, dim]
             this_hero_token_list.append(img_token)
 
             # hero
             in_fea = hero_tensor
-            in_fea = torch.split(in_fea, 1, 1)
-            fc3_result_tmp = []
-            for x in in_fea:
-                fc3_result_tmp.append(self.hero_mlp(x))
-            fc3_result = torch.cat(fc3_result_tmp, 1)
+
+            fc3_result = self.hero_mlp(in_fea)
 
             # [bs, n, dim]
             this_hero_target_token_list.append(fc3_result)
@@ -273,11 +241,8 @@ class Model(nn.Module):
 
             # monster
             in_fea = monster_tensor
-            in_fea = torch.split(in_fea, 1, 1)
-            fc3_result_tmp = []
-            for x in in_fea:
-                fc3_result_tmp.append(self.monster_mlp(x))
-            fc3_result = torch.cat(fc3_result_tmp, 1)
+
+            fc3_result = self.monster_mlp(in_fea)
 
             # Note: this pooling should be checked
             pooling_result = self._pooling(fc3_result, Config.MONSTER_NUM, keep_dim=3, is_trt=True, pool_type='max')
@@ -289,11 +254,9 @@ class Model(nn.Module):
             result_list = []
             for camp_index in range(Config.CAMP_NUM):
                 in_fea = soldier_tensor_list[camp_index]
-                in_fea = torch.split(in_fea, 1, 1)
-                fc3_result_tmp = []
-                for x in in_fea:
-                    fc3_result_tmp.append(self.soldier_mlp(x))
-                fc3_result = torch.cat(fc3_result_tmp, 1)
+                # [?, 10, 256]
+                fc3_result = self.soldier_mlp(in_fea)
+                # [?, 1, 256]
                 pooling_result = self._pooling(fc3_result, Config.SOLDIER_NUM, keep_dim=3, is_trt=True, pool_type='max')
 
                 if camp_index == 1:
@@ -304,11 +267,9 @@ class Model(nn.Module):
             result_list = []
             for camp_index in range(Config.CAMP_NUM):
                 in_fea = organ_tensor_list[camp_index]
-                in_fea = torch.split(in_fea, 1, 1)
-                fc3_result_tmp = []
-                for x in in_fea:
-                    fc3_result_tmp.append(self.organ_mlp(x))
-                fc3_result = torch.cat(fc3_result_tmp, 1)
+                # [?, 3, 256]
+                fc3_result = self.organ_mlp(in_fea)
+                # [?, 1, 256]
                 pooling_result = self._pooling(fc3_result, Config.ORGAN_NUM, keep_dim=3, is_trt=True, pool_type='max')
 
                 if camp_index == 1:
@@ -325,8 +286,8 @@ class Model(nn.Module):
             none_target = torch.ones_like(main_token, dtype=torch.float32) * 0.1
             this_hero_target_token_list.insert(0, none_target)
 
-            this_hero_token_tensor = torch.cat(this_hero_token_list, dim=1)
-            this_hero_target_token_tensor = torch.cat(this_hero_target_token_list, axis=1)
+            this_hero_token_tensor = torch.cat(this_hero_token_list, dim=1)  # ([bs, 19, 224])
+            this_hero_target_token_tensor = torch.cat(this_hero_target_token_list, axis=1)  # ([bs, 39, 224])
 
             # store
 
@@ -376,14 +337,12 @@ class Model(nn.Module):
 
             # LSTM
             # cell
-            in_lstm_cell = self.lstm_cell
-            # in_lstm_cell = temp_lstm_cell_list[hero_index]
+            in_lstm_cell = temp_lstm_cell_list[hero_index]
             # lstm_cell = in_lstm_cell.reshape(1, -1, self.lstm_unit_size)
             lstm_cell = in_lstm_cell.reshape(1, -1, self.lstm_unit_size).contiguous()
 
             # hidden
-            in_lstm_hidden = self.lstm_hidden
-            # in_lstm_hidden = temp_lstm_hidden_list[hero_index]
+            in_lstm_hidden = temp_lstm_hidden_list[hero_index]
             # lstm_hidden = in_lstm_hidden.reshape(1, -1, self.lstm_unit_size)
             lstm_hidden = in_lstm_hidden.reshape(1, -1, self.lstm_unit_size).contiguous()
 
@@ -394,6 +353,7 @@ class Model(nn.Module):
             lstm_initial_state = (public_lstm_hidden, public_lstm_cell)
 
             commu_fea_time_step_transpose = commu_fea_time_step.permute(1, 0, 2)
+
             lstm_outputs, (hn, cn) = self.lstm(commu_fea_time_step_transpose, lstm_initial_state)
             lstm_outputs = lstm_outputs.permute(1, 0, 2)
             lstm_outputs = lstm_outputs.reshape(-1, self.lstm_unit_size)
@@ -457,18 +417,7 @@ class Model(nn.Module):
         # total_loss, info_list = self.compute_loss(data_list, rst_list)  # for debug. merge loss compute
         # return total_loss, info_list
 
-        self.probs_h0 = torch.flatten(torch.cat(all_hero_predict_result_list[0], 1), start_dim=1)
-        self.probs_h1 = torch.flatten(torch.cat(all_hero_predict_result_list[1], 1), start_dim=1)
-        self.probs_h2 = torch.flatten(torch.cat(all_hero_predict_result_list[2], 1), start_dim=1)
-
-        self.lstm_cell_output = cn
-        self.lstm_hidden_output = hn
-
-        rst_list = [self.probs_h0, self.probs_h1, self.probs_h2, self.lstm_cell_output, self.lstm_hidden_output]
-
-        if not inference:
-            print([x.shape for x in rst_list])
-        return rst_list
+        return all_hero_predict_result_list  # 预测维度 ([13, 25, 42, 42, 39, 1])
 
     def _pooling(self, tensor, token_num, keep_dim=2, is_trt=False, pool_type='max'):
         dim = int(tensor[0].shape[-1])
@@ -489,8 +438,151 @@ class Model(nn.Module):
 
         return reshape_pool_result
 
-    def compute_loss(self, data_list, rst_list):
+    def _calculate_single_hero_hard_loss(self, unsqueeze_label_list, fc2_label_list, unsqueeze_weight_list):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
 
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+            label_loss = F.cross_entropy(fc2_label_list[i], label_list[i], reduction='none')
+            label_final_loss = torch.mean(weight * label_loss)
+            cost_p_label_list.append(label_final_loss)
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_soft_loss(self, student_logits_list, teacher_probs_list, unsqueeze_weight_list):
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(student_logits_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+            # Calculate soft label loss
+            teacher_probs = teacher_probs_list[i]
+            soft_label_loss = F.cross_entropy(student_logits_list[i], teacher_probs, reduction='none')
+            label_final_loss = torch.mean(weight * soft_label_loss)
+            cost_p_label_list.append(label_final_loss)
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_distill_loss(self, unsqueeze_label_list, student_logits_list, teacher_logits_list,
+                                            unsqueeze_weight_list, temperature=4.0, lambda_weight=0.5):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+
+            # Calculate hard label loss
+            hard_label_loss = F.cross_entropy(student_logits_list[i], label_list[i], reduction='none')
+            hard_label_final_loss = torch.mean(weight * hard_label_loss)
+
+            # Calculate soft label loss
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_logits_temperature = teacher_logits_list[i] / temperature
+            teacher_probs = F.softmax(teacher_logits_temperature, dim=1)
+
+            soft_label_loss = F.cross_entropy(student_logits_temperature, teacher_probs, reduction='none')
+            soft_label_final_loss = torch.mean(weight * soft_label_loss)
+
+            # Combine the hard and soft label losses with the specified weight
+            final_loss = (1 - lambda_weight) * hard_label_final_loss + (
+                        temperature ** 2) * lambda_weight * soft_label_final_loss
+
+            cost_p_label_list.append(final_loss)
+
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def compute_loss(self, data_list, rst_list):
+        cost_all = torch.tensor(0.0, dtype=torch.float32)
+        all_hero_loss_list = []
+        for hero_index in range(len(data_list)):
+            this_hero_label_task_count = len(self.hero_label_size_list[hero_index])
+            data_index = 1
+
+            # legal action
+            data_index += this_hero_label_task_count
+
+            # reward
+            data_index += 1
+
+            # advantage
+            data_index += 1
+
+            # action (label)
+            this_hero_action_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
+            data_index += this_hero_label_task_count
+
+            # action (prob lists, each corresponds to a sub-task)
+            this_hero_probability_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
+            data_index += this_hero_label_task_count
+
+            # is_train
+            data_index += 1
+
+            # sub_action
+            this_hero_weight_list = data_list[hero_index][
+                                    data_index:(data_index + this_hero_label_task_count)]
+            data_index += this_hero_label_task_count  # originally (task_num + 1)
+
+            # policy network output
+            this_hero_fc_label_list = rst_list[hero_index][:-1]
+
+            # value network output
+            this_hero_value = rst_list[hero_index][-1]
+
+            # hard label loss
+            this_hero_hard_loss_list = self._calculate_single_hero_hard_loss(this_hero_action_list,
+                                                                             this_hero_fc_label_list,
+                                                                             this_hero_weight_list)
+
+            # soft label loss
+            this_hero_soft_loss_list = self._calculate_single_hero_soft_loss(this_hero_fc_label_list,
+                                                                             this_hero_probability_list,
+                                                                             this_hero_weight_list)
+
+            # distill loss (NOT READY FOR USE)
+            # this_hero_target_logits_list = this_hero_probability_list  # TODO: should replace with logits from teacher
+            # 通过对概率值取对数（torch.log），可以得到相应的logits
+            # 使用torch.clamp函数将概率值限定在一个较小的最小值（如1e-8）以上，确保对数运算的安全性。
+            this_hero_target_logits_list = [torch.log(torch.clamp(prob, min=1e-8)) for prob in this_hero_probability_list]
+
+            this_hero_distill_loss_list = self._calculate_single_hero_distill_loss(this_hero_action_list,
+                                                                                   this_hero_fc_label_list,
+                                                                                   this_hero_target_logits_list,
+                                                                                   this_hero_weight_list)
+
+            cost_all = cost_all + \
+                            Config.HARD_WEIGHT * this_hero_hard_loss_list[0] + \
+                            Config.SOFT_WEIGHT * this_hero_soft_loss_list[0] + \
+                            Config.DISTILL_WEIGHT * this_hero_distill_loss_list[0] + \
+                            0.0 * torch.sum(this_hero_value)  # loss item (scalar)
+            all_hero_loss_list.append(
+                [this_hero_hard_loss_list[0], this_hero_soft_loss_list[0], this_hero_distill_loss_list[0]]
+            )
+        return cost_all, [[all_hero_loss_list[0][0], all_hero_loss_list[0][1], all_hero_loss_list[0][2]],
+                          [all_hero_loss_list[1][0], all_hero_loss_list[1][1], all_hero_loss_list[1][2]],
+                          [all_hero_loss_list[2][0], all_hero_loss_list[2][1], all_hero_loss_list[2][2]]]
+
+    def compute_rl_loss(self, data_list, rst_list):
         all_hero_loss_list = []
         total_loss = torch.tensor(0.0)
         for hero_index, hero_data in enumerate(data_list):
@@ -572,6 +664,9 @@ class Model(nn.Module):
                                                             _hero_label_size_list[task_index])
                     legal_action_flag_list_max_mask = (1 - _hero_legal_action_flag_list[task_index]) * boundary
 
+                    # print("task index: {}".format(task_index))
+                    # print(_hero_fc_label_result[task_index].shape)
+                    # print(legal_action_flag_list_max_mask.shape)
                     label_logits_subtract_max = torch.clamp(
                         _hero_fc_label_result[task_index] - torch.max(
                             _hero_fc_label_result[task_index] - legal_action_flag_list_max_mask, dim=1, keepdim=True
@@ -634,32 +729,20 @@ class Model(nn.Module):
             all_hero_loss_list.append(_hero_all_loss_list)
         return total_loss, [total_loss, [all_hero_loss_list[0][1], all_hero_loss_list[0][2], all_hero_loss_list[0][3]], [all_hero_loss_list[1][1], all_hero_loss_list[1][2], all_hero_loss_list[1][3]], [all_hero_loss_list[2][1], all_hero_loss_list[2][2], all_hero_loss_list[2][3]]]
 
-    def format_data(self, datas, inference=False):
-        hero_data_list = []
-        for hero_index in range(self.hero_num):
-            hero_data = datas[hero_index].float()
-            hero_data.view(-1, self.hero_data_split_shape[hero_index][0])
-            hero_data = torch.unsqueeze(hero_data, 0)
-            hero_data_list.append(hero_data)
-        self.lstm_cell = datas[-2].float()
-        self.lstm_hidden = datas[-1].float()
-
-        return hero_data_list
-
-    def format_data_with_label(self, datas):
-        datas = datas.view(-1, self.hero_num, self.hero_data_len)
-        data_list = datas.permute(1, 0, 2)
+    def format_data(self, datas):  # ([32, 242352])  batch_size = 32
+        datas = datas.view(-1, self.hero_num, self.hero_data_len)  # ([32, 3, 80784])
+        data_list = datas.permute(1, 0, 2)  # ([3, 32, 80784])
 
         hero_data_list = []
         for hero_index in range(self.hero_num):
             # calculate length of each frame
-            hero_each_frame_data_length = np.sum(np.array(self.hero_data_split_shape[hero_index]))
-            hero_sequence_data_length = hero_each_frame_data_length * self.lstm_time_steps
-            hero_sequence_data_split_shape = [hero_sequence_data_length, self.lstm_unit_size, self.lstm_unit_size]
+            hero_each_frame_data_length = np.sum(np.array(self.hero_data_split_shape[hero_index]))  # 4921
+            hero_sequence_data_length = hero_each_frame_data_length * self.lstm_time_steps  # 78736 = 4921 * 16, 有连续16帧数据
+            hero_sequence_data_split_shape = [hero_sequence_data_length, self.lstm_unit_size, self.lstm_unit_size]  # [78736, 1024, 1024]
 
             sequence_data, lstm_cell_data, lstm_hidden_data = data_list[hero_index].float().split(
-                hero_sequence_data_split_shape, dim=1)
-            reshape_sequence_data = sequence_data.reshape(-1, hero_each_frame_data_length)
+                hero_sequence_data_split_shape, dim=1)  # ([32, 78736]), ([32, 1024]), ([32, 1024])
+            reshape_sequence_data = sequence_data.reshape(-1, hero_each_frame_data_length)  # torch.Size([32 * 16, 4921])
             hero_data = reshape_sequence_data.split(self.hero_data_split_shape[hero_index], dim=1)
             hero_data = list(hero_data)  # convert from tuple to list
             hero_data.append(lstm_cell_data)
@@ -720,13 +803,13 @@ class LSTMCell(nn.Module):
             nn.init.zeros_(self.fc.bias)
 
     def forward(self, input, hidden):
-        """Propogate img through the network."""
+        """Propogate input through the network."""
 
         # tag = None  #
         def recurrence(input, hidden):
             """Recurrence helper."""
             hx, cx = hidden  # n_b x hidden_dim
-            # gates = self.input_weights(img) + \
+            # gates = self.input_weights(input) + \
             #     self.hidden_weights(hx)
             if len(hx.shape) == 3:
                 assert hx.shape[0] == 1  # (time_steps=1, batch_size, hidden_dim)
@@ -927,17 +1010,17 @@ def _compute_conv_out_shape(kernel_size: Tuple[int, int], padding: Tuple[int, in
 def make_conv_layer(kernel_size: Tuple[int, int], in_channels: int, out_channels: int, padding: str,
                     stride: Tuple[int, int] = (1, 1), input_shape=None):
     """Wrapper function to create and initialize ``Conv2d`` layers. Returns output shape along the
-        way if img shape is supplied. Add support for 'same' and 'valid' padding scheme (would
+        way if input shape is supplied. Add support for 'same' and 'valid' padding scheme (would
         be unnecessary if using pytorch 1.9.0 and higher).
 
     Args:
         kernel_size (Tuple[int, int]): height and width of the kernel
-        in_channels (int): number of channels of the img image
+        in_channels (int): number of channels of the input image
         out_channels (int): number of channels of the convolution output
         padding (Union[str, Tuple[int, int]]): either explicit padding size to add in both
             directions or padding scheme (either "same" or "valid)
         stride (Union[int, Tuple[int, int]], optional): stride. Defaults to (1,1).
-        input_shape (Tuple[int, int], optional): height and width of the img image. Defaults
+        input_shape (Tuple[int, int], optional): height and width of the input image. Defaults
             to None.
 
     Returns:
@@ -978,5 +1061,5 @@ def make_conv_layer(kernel_size: Tuple[int, int], in_channels: int, out_channels
 
 
 if __name__ == '__main__':
-    net_torch = Model()
+    net_torch = NetworkModel()
     print(net_torch)

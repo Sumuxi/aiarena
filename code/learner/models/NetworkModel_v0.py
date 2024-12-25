@@ -1,34 +1,25 @@
-import torch                            # in place of tensorflow
-import torch.nn as nn                   # for builtin modules including Linear, Conv2d, MultiheadAttention, LayerNorm, etc
-import torch.nn.functional as F
-from torch.nn import ModuleDict         # for layer naming when nn.Sequential is not viable
-import numpy as np                      # for some basic dimention computation, might be redundent
-
-from math import ceil, floor
-from collections import OrderedDict
-
-# typing
-from torch import Tensor, LongTensor
-from typing import Dict, List, Tuple
+import sys
 from ctypes import Union
+from math import floor
+# typing
+from typing import List, Tuple
 
-from config.model_config import ModelConfig as Config
+import numpy as np  # for some basic dimension computation, might be redundant
+import torch
+import torch.nn as nn  # for builtin modules including Linear, Conv2d, MultiheadAttention, LayerNorm, etc
+import torch.nn.functional as F
+
+from config.Config import Config
 
 
 ##################
 ## Actual model ##
 ##################
-class Model(nn.Module):
-    def __init__(self, ModelConfig):
-        super(Model, self).__init__()
-        # feature configure parameter
-        self.model_name = Config.NETWORK_NAME
-
-        # build onnx
-        self.build_onnx = False
-
+class NetworkModel(nn.Module):
+    def __init__(self):
+        super(NetworkModel, self).__init__()
         # lstm
-        self.lstm_time_steps = 1  # for inference
+        self.lstm_time_steps = Config.LSTM_TIME_STEPS
         self.lstm_unit_size = Config.LSTM_UNIT_SIZE
         self.lstm_size = Config.LSTM_UNIT_SIZE
 
@@ -58,7 +49,20 @@ class Model(nn.Module):
         self.hero_num = 3
         self.hero_data_len = sum(Config.data_shapes[0])
 
-        # self.pos_lstm_unit_size = Config.POS_LSTM_UNIT_SIZE
+        self.distill_temperature = Config.DISTILL_TEMPERATURE
+        self.distill_weight = Config.DISTILL_WEIGHT
+
+        print("model file: ", __name__)
+        # loss weights
+        coefficients = {
+            "hard loss weight": Config.HARD_WEIGHT,
+            "soft loss weight": Config.SOFT_WEIGHT,
+            "distill loss weight": self.distill_weight,
+            "distill temperature": self.distill_temperature
+        }
+        for k, v in coefficients.items():
+            print(f"{k}: {v}")
+        sys.stdout.flush()
 
         # build network
         kernel_size_list = [(5, 5), (3, 3)]
@@ -83,7 +87,7 @@ class Model(nn.Module):
                 self.conv_layers.add_module("img_feat_relu{0}".format(i + 1), nn.ReLU())
                 self.conv_layers.add_module("img_feat_maxpool{0}".format(i + 1), nn.MaxPool2d(3, 2))
         '''share'''
-        self.fc1_img = make_fc_layer(8 * 8, Config.TOKEN_DIM)  # NOTE: USE relu or not?
+        self.fc1_img = make_fc_layer(8 * 8, Config.TOKEN_DIM)
 
         ''' hero_share module'''
         fc_hero_dim_list = [Config.HERO_DIM, 1024, 1024, Config.TOKEN_DIM]
@@ -122,7 +126,7 @@ class Model(nn.Module):
         self.fc1_public = MLP([Config.TOKEN_DIM, self.lstm_unit_size], "fc1_public",
                               non_linearity_last=True)  # add relu
 
-        self.fc1_label = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)  # NOTE: USE relu or not?
+        self.fc1_label = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
 
         self.fc2_label_list = []
 
@@ -133,10 +137,10 @@ class Model(nn.Module):
         self.fc2_label_list = nn.ModuleList(self.fc2_label_list)
 
         # target attention
-        self.fc1_target = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)  # NOTE: USE relu or not?
-        self.fc2_target = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)  # NOTE: USE relu or not?
+        self.fc1_target = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
+        self.fc2_target = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)
 
-        self.fc1_target_token = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)  # NOTE: USE relu or not?
+        self.fc1_target_token = make_fc_layer(Config.TOKEN_DIM, self.target_embedding_dim)
         self.fc2_target_token = make_fc_layer(self.target_embedding_dim, self.target_embedding_dim,
                                               use_bias=False)
 
@@ -144,35 +148,12 @@ class Model(nn.Module):
         self.fc1_value = make_fc_layer(self.lstm_unit_size, Config.TOKEN_DIM)
         self.fc2_value = make_fc_layer(Config.TOKEN_DIM, self.value_head_num)
 
-        # # hero frd value
-        # self.fc1_frd_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        # self.fc2_frd_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
-        #
-        # # hero emy value
-        # self.fc1_emy_value = make_fc_layer(self.lstm_unit_size, self.lstm_unit_size)
-        # self.fc2_emy_value = make_fc_layer(self.lstm_unit_size, self.value_head_num)
-
         self.lstm = torch.nn.LSTM(input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size, num_layers=1,
                                   bias=True, batch_first=False, dropout=0, bidirectional=False)
         # self.lstm = LSTMCell(input_size=self.lstm_unit_size, hidden_size=self.lstm_unit_size, batch_first=False,
         #                      forget_bias=1.)
 
-        # I/O placeholder
-        self.probs_h0 = None
-        self.probs_h1 = None
-        self.probs_h2 = None
-        self.lstm_cell = None
-        self.lstm_hidden = None
-        self.lstm_cell_output = None
-        self.lstm_hidden_output = None
-
-    def forward(self, data_list, data_list_with_label=None, inference=False):
-        if self.build_onnx:
-            data_list = self.format_data(data_list)
-
-        if data_list_with_label is not None:
-            data_list_with_label = self.format_data_with_label(data_list_with_label)
-
+    def forward(self, data_list):
         each_hero_data_list = data_list
 
         all_hero_target_token_list = []
@@ -181,15 +162,12 @@ class Model(nn.Module):
         temp_lstm_cell_list = []
         temp_lstm_hidden_list = []
 
-        for hero_index, hero_data in enumerate(data_list):  # is the shape of data_list = (time, bs, fea_dim)  ?
-            if not inference:
-                hero_feature = hero_data[0]
-            else:
-                hero_feature = hero_data
+        for hero_index, hero_data in enumerate(data_list):
+            hero_feature = hero_data[0]  # ([512, 4586])  实际batch_size = 32，此处 bs = 32 * 16帧 = 512
 
             img_fet_dim = np.prod(self.hero_seri_vec_split_shape[hero_index][0])  # 6 x 17 x 17 = 1734
             vec_fet_dim = np.prod(self.hero_seri_vec_split_shape[hero_index][1])  # 2852
-
+            # ([bs, 1734]), ([bs, 2852])
             feature_img, feature_vec = hero_feature.split([img_fet_dim, vec_fet_dim], dim=1)  # (bs, tot_fea_dim)
 
             feature_img_shape = list(self.hero_seri_vec_split_shape[0][0])  # (c, h, w)
@@ -197,12 +175,12 @@ class Model(nn.Module):
             feature_vec_shape = list(self.hero_seri_vec_split_shape[0][1])
             feature_vec_shape.insert(0, -1)
 
-            _feature_img = feature_img.reshape(feature_img_shape)
-            _feature_vec = feature_vec.reshape(feature_vec_shape)
+            _feature_img = feature_img.reshape(feature_img_shape)  # ([bs, 6, 17, 17])
+            _feature_vec = feature_vec.reshape(feature_vec_shape)  # ([bs, 2852])
 
-            # lstm_index = len(hero_data)
-            # temp_lstm_cell_list.append(hero_data[lstm_index - 2])
-            # temp_lstm_hidden_list.append(hero_data[lstm_index - 1])
+            lstm_index = len(hero_data)
+            temp_lstm_cell_list.append(hero_data[lstm_index - 2])
+            temp_lstm_hidden_list.append(hero_data[lstm_index - 1])
 
             hero_dim = int(Config.HERO_NUM * Config.HERO_DIM * Config.CAMP_NUM)
             main_dim = int(Config.MAIN_HERO_DIM)
@@ -215,47 +193,45 @@ class Model(nn.Module):
             split_feature_vec = _feature_vec.split([
                 hero_dim, main_dim, soldier_dim, soldier_dim,
                 organ_dim, organ_dim, monster_dim, global_info_dim,
-            ], dim=1)
+            ], dim=1)  # [1506, 44, 250, 250, 87, 87, 560, 68]
 
-            hero_tensor = split_feature_vec[0].reshape(-1, Config.HERO_NUM * Config.CAMP_NUM, Config.HERO_DIM)
-            main_tensor = split_feature_vec[1].reshape(-1, 1, Config.MAIN_HERO_DIM)
+            hero_tensor = split_feature_vec[0].reshape(-1, Config.HERO_NUM * Config.CAMP_NUM,
+                                                       Config.HERO_DIM)  # ([bs, 6, 251])
+            main_tensor = split_feature_vec[1].reshape(-1, 1, Config.MAIN_HERO_DIM)  # ([bs, 1, 44])
 
             # pos_tensor = split_feature_vec[2]
             frd_soldier_tensor = split_feature_vec[2].reshape(-1, Config.SOLDIER_NUM, Config.SOLDIER_DIM)
             emy_soldier_tensor = split_feature_vec[3].reshape(-1, Config.SOLDIER_NUM, Config.SOLDIER_DIM)
 
-            soldier_tensor_list = [frd_soldier_tensor, emy_soldier_tensor]
+            soldier_tensor_list = [frd_soldier_tensor, emy_soldier_tensor]  # ([bs, 10, 25]), ([bs, 10, 25])
 
             frd_organ_tensor = split_feature_vec[4].reshape(-1, Config.ORGAN_NUM, Config.ORGAN_DIM)
             emy_organ_tensor = split_feature_vec[5].reshape(-1, Config.ORGAN_NUM, Config.ORGAN_DIM)
 
-            organ_tensor_list = [frd_organ_tensor, emy_organ_tensor]
+            organ_tensor_list = [frd_organ_tensor, emy_organ_tensor]  # ([bs, 3, 29]), ([bs, 3, 29])
 
-            monster_tensor = split_feature_vec[6].reshape(-1, Config.MONSTER_NUM, Config.MONSTER_DIM)
-            global_tensor = split_feature_vec[7].reshape(-1, 1, Config.GLOBAL_DIM)
+            monster_tensor = split_feature_vec[6].reshape(-1, Config.MONSTER_NUM, Config.MONSTER_DIM)  # ([bs, 20, 28])
+            global_tensor = split_feature_vec[7].reshape(-1, 1, Config.GLOBAL_DIM)  # ([bs, 1, 68])
 
             this_hero_target_token_list = []
             this_hero_token_list = []
 
-            conv2_result = self.conv_layers(_feature_img)
+            conv2_result = self.conv_layers(_feature_img)  # (bs, 6, 8, 8)
 
             # fc
             dim = np.prod(conv2_result.shape[2:])
 
-            conv2_result_reshape = conv2_result.reshape(-1, self.img_channel, dim)
+            conv2_result_reshape = conv2_result.reshape(-1, self.img_channel, dim)  # (bs, 6, 64)
 
-            img_token = self.fc1_img(conv2_result_reshape)
+            img_token = self.fc1_img(conv2_result_reshape)  # (bs, 6, 224)
 
             # [bs, img_channel, dim]
             this_hero_token_list.append(img_token)
 
             # hero
             in_fea = hero_tensor
-            in_fea = torch.split(in_fea, 1, 1)
-            fc3_result_tmp = []
-            for x in in_fea:
-                fc3_result_tmp.append(self.hero_mlp(x))
-            fc3_result = torch.cat(fc3_result_tmp, 1)
+
+            fc3_result = self.hero_mlp(in_fea)
 
             # [bs, n, dim]
             this_hero_target_token_list.append(fc3_result)
@@ -273,11 +249,8 @@ class Model(nn.Module):
 
             # monster
             in_fea = monster_tensor
-            in_fea = torch.split(in_fea, 1, 1)
-            fc3_result_tmp = []
-            for x in in_fea:
-                fc3_result_tmp.append(self.monster_mlp(x))
-            fc3_result = torch.cat(fc3_result_tmp, 1)
+
+            fc3_result = self.monster_mlp(in_fea)
 
             # Note: this pooling should be checked
             pooling_result = self._pooling(fc3_result, Config.MONSTER_NUM, keep_dim=3, is_trt=True, pool_type='max')
@@ -289,11 +262,9 @@ class Model(nn.Module):
             result_list = []
             for camp_index in range(Config.CAMP_NUM):
                 in_fea = soldier_tensor_list[camp_index]
-                in_fea = torch.split(in_fea, 1, 1)
-                fc3_result_tmp = []
-                for x in in_fea:
-                    fc3_result_tmp.append(self.soldier_mlp(x))
-                fc3_result = torch.cat(fc3_result_tmp, 1)
+                # [?, 10, 256]
+                fc3_result = self.soldier_mlp(in_fea)
+                # [?, 1, 256]
                 pooling_result = self._pooling(fc3_result, Config.SOLDIER_NUM, keep_dim=3, is_trt=True, pool_type='max')
 
                 if camp_index == 1:
@@ -304,11 +275,9 @@ class Model(nn.Module):
             result_list = []
             for camp_index in range(Config.CAMP_NUM):
                 in_fea = organ_tensor_list[camp_index]
-                in_fea = torch.split(in_fea, 1, 1)
-                fc3_result_tmp = []
-                for x in in_fea:
-                    fc3_result_tmp.append(self.organ_mlp(x))
-                fc3_result = torch.cat(fc3_result_tmp, 1)
+                # [?, 3, 256]
+                fc3_result = self.organ_mlp(in_fea)
+                # [?, 1, 256]
                 pooling_result = self._pooling(fc3_result, Config.ORGAN_NUM, keep_dim=3, is_trt=True, pool_type='max')
 
                 if camp_index == 1:
@@ -325,8 +294,8 @@ class Model(nn.Module):
             none_target = torch.ones_like(main_token, dtype=torch.float32) * 0.1
             this_hero_target_token_list.insert(0, none_target)
 
-            this_hero_token_tensor = torch.cat(this_hero_token_list, dim=1)
-            this_hero_target_token_tensor = torch.cat(this_hero_target_token_list, axis=1)
+            this_hero_token_tensor = torch.cat(this_hero_token_list, dim=1)  # ([bs, 19, 224])
+            this_hero_target_token_tensor = torch.cat(this_hero_target_token_list, axis=1)  # ([bs, 39, 224])
 
             # store
 
@@ -376,14 +345,12 @@ class Model(nn.Module):
 
             # LSTM
             # cell
-            in_lstm_cell = self.lstm_cell
-            # in_lstm_cell = temp_lstm_cell_list[hero_index]
+            in_lstm_cell = temp_lstm_cell_list[hero_index]
             # lstm_cell = in_lstm_cell.reshape(1, -1, self.lstm_unit_size)
             lstm_cell = in_lstm_cell.reshape(1, -1, self.lstm_unit_size).contiguous()
 
             # hidden
-            in_lstm_hidden = self.lstm_hidden
-            # in_lstm_hidden = temp_lstm_hidden_list[hero_index]
+            in_lstm_hidden = temp_lstm_hidden_list[hero_index]
             # lstm_hidden = in_lstm_hidden.reshape(1, -1, self.lstm_unit_size)
             lstm_hidden = in_lstm_hidden.reshape(1, -1, self.lstm_unit_size).contiguous()
 
@@ -394,6 +361,7 @@ class Model(nn.Module):
             lstm_initial_state = (public_lstm_hidden, public_lstm_cell)
 
             commu_fea_time_step_transpose = commu_fea_time_step.permute(1, 0, 2)
+
             lstm_outputs, (hn, cn) = self.lstm(commu_fea_time_step_transpose, lstm_initial_state)
             lstm_outputs = lstm_outputs.permute(1, 0, 2)
             lstm_outputs = lstm_outputs.reshape(-1, self.lstm_unit_size)
@@ -457,18 +425,7 @@ class Model(nn.Module):
         # total_loss, info_list = self.compute_loss(data_list, rst_list)  # for debug. merge loss compute
         # return total_loss, info_list
 
-        self.probs_h0 = torch.flatten(torch.cat(all_hero_predict_result_list[0], 1), start_dim=1)
-        self.probs_h1 = torch.flatten(torch.cat(all_hero_predict_result_list[1], 1), start_dim=1)
-        self.probs_h2 = torch.flatten(torch.cat(all_hero_predict_result_list[2], 1), start_dim=1)
-
-        self.lstm_cell_output = cn
-        self.lstm_hidden_output = hn
-
-        rst_list = [self.probs_h0, self.probs_h1, self.probs_h2, self.lstm_cell_output, self.lstm_hidden_output]
-
-        if not inference:
-            print([x.shape for x in rst_list])
-        return rst_list
+        return all_hero_predict_result_list  # 预测维度 ([13, 25, 42, 42, 39, 1])
 
     def _pooling(self, tensor, token_num, keep_dim=2, is_trt=False, pool_type='max'):
         dim = int(tensor[0].shape[-1])
@@ -489,8 +446,368 @@ class Model(nn.Module):
 
         return reshape_pool_result
 
-    def compute_loss(self, data_list, rst_list):
+    def _calculate_single_hero_hard_loss(self, unsqueeze_label_list, fc2_label_list, unsqueeze_weight_list):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
 
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+            label_loss = F.cross_entropy(fc2_label_list[i], label_list[i], reduction='none')
+            label_final_loss = torch.mean(weight * label_loss)
+            cost_p_label_list.append(label_final_loss)
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_soft_loss(self, student_logits_list, teacher_logits_list, unsqueeze_weight_list):
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(student_logits_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+            # Calculate soft label loss
+            teacher_probs = F.softmax(teacher_logits_list[i], dim=1)
+            soft_label_loss = F.cross_entropy(student_logits_list[i], teacher_probs, reduction='none')
+            label_final_loss = torch.mean(weight * soft_label_loss)
+            cost_p_label_list.append(label_final_loss)
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_distill_loss(self, unsqueeze_label_list, student_logits_list, teacher_logits_list,
+                                            unsqueeze_weight_list, temperature=4.0, lambda_weight=0.5):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+
+            # Calculate hard label loss
+            hard_label_loss = F.cross_entropy(student_logits_list[i], label_list[i], reduction='none')
+            hard_label_final_loss = torch.mean(weight * hard_label_loss)
+
+            # Calculate soft label loss
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_logits_temperature = teacher_logits_list[i] / temperature
+            teacher_probs = F.softmax(teacher_logits_temperature, dim=1)
+
+            soft_label_loss = F.cross_entropy(student_logits_temperature, teacher_probs, reduction='none')
+            soft_label_final_loss = torch.mean(weight * soft_label_loss)
+
+            # Combine the hard and soft label losses with the specified weight
+            final_loss = (1 - lambda_weight) * hard_label_final_loss + (
+                    temperature ** 2) * lambda_weight * soft_label_final_loss
+
+            cost_p_label_list.append(final_loss)
+
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_temperatured_soft_loss(self, unsqueeze_label_list, student_logits_list, teacher_logits_list,
+                                                 unsqueeze_weight_list, temperature=4.0):
+        label_list = []
+        for ele in unsqueeze_label_list:
+            label_list.append(torch.squeeze(ele, dim=1).long())
+        weight_list = []
+        for weight in unsqueeze_weight_list:
+            weight_list.append(torch.squeeze(weight, dim=1))
+
+        cost_p_label_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != torch.tensor(0, dtype=torch.float32)).float()
+
+            # Calculate soft label loss
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_logits_temperature = teacher_logits_list[i] / temperature
+            teacher_probs = F.softmax(teacher_logits_temperature, dim=1)
+
+            soft_label_loss = F.cross_entropy(student_logits_temperature, teacher_probs, reduction='none')
+            soft_label_final_loss = torch.mean(weight * soft_label_loss)
+
+            cost_p_label_list.append(soft_label_final_loss)
+
+        loss = torch.tensor(0.0, dtype=torch.float32)
+        for i in range(len(cost_p_label_list)):
+            loss = loss + cost_p_label_list[i]
+        return loss, cost_p_label_list
+
+    def _calculate_single_hero_kl_div_loss(self, unsqueeze_label_list, student_logits_list, teacher_logits_list,
+                                           unsqueeze_weight_list, temperature=4.0):
+        label_list = [torch.squeeze(ele, dim=1).long() for ele in unsqueeze_label_list]
+        weight_list = [torch.squeeze(weight, dim=1) for weight in unsqueeze_weight_list]
+
+        loss_list = []
+        for i in range(len(label_list)):
+            weight = (weight_list[i] != 0).float()
+
+            student_logits_temperature = student_logits_list[i] / temperature
+            teacher_logits_temperature = teacher_logits_list[i] / temperature
+
+            # 使用 log_softmax, 避免指数运行带来的数值不稳定
+            student_probs_log = F.log_softmax(student_logits_temperature, dim=1)
+            teacher_probs_log = F.log_softmax(teacher_logits_temperature, dim=1)
+
+            # 计算 KL 散度，log_target=True 表示教师模型的目标已是 log 概率
+            kl_div_loss = F.kl_div(student_probs_log, teacher_probs_log, reduction='none', log_target=True)
+            # 通过对类别维度进行求和来得到每个样本的损失
+            kl_div_loss = kl_div_loss.sum(dim=1)  # 或使用 .mean(dim=1)
+
+            soft_label_final_loss = torch.mean(weight * kl_div_loss)
+
+            loss_list.append(soft_label_final_loss)
+
+        loss = torch.sum(torch.stack(loss_list))
+        return loss, loss_list
+
+    def _calculate_single_hero_topk_kl_div_loss(self,
+                                                unsqueeze_label_list,
+                                                student_logits_list,
+                                                teacher_logits_list,
+                                                topk_weight_list,
+                                                top_k=3):
+        label_list = [torch.squeeze(ele, dim=1).long() for ele in unsqueeze_label_list]
+        # weight_list = [torch.squeeze(weight[], dim=1) for weight in topk_weight_list]
+
+        teacher_masked_logits_list = teacher_logits_list
+        teacher_topk_action_list = [torch.topk(x, top_k, dim=-1).indices for x in teacher_masked_logits_list]
+
+        loss_list = []
+        for i in range(len(label_list)):
+            weight_i = topk_weight_list[:, :, i + 1]
+            weight = (weight_i != 0).float()
+
+            # 使用 log_softmax, 避免指数运行带来的数值不稳定
+            student_probs_log = F.log_softmax(student_logits_list[i], dim=1)
+            teacher_probs_log = F.log_softmax(teacher_masked_logits_list[i], dim=1)
+
+            # 计算全类别上的 KL 散度
+            kl_div_loss = F.kl_div(student_probs_log, teacher_probs_log, reduction='none', log_target=True)
+            # kl_div_loss_full = kl_div_loss.sum(dim=1)  # 全类别 KL 散度
+
+            # 只计算前 k 个类别的 KL 散度
+            # top_k_indices = torch.topk(teacher_probs_log, top_k, dim=1).indices
+            top_k_indices = teacher_topk_action_list[i]
+            # topk_kl_div_loss = kl_div_loss.gather(dim=1, index=top_k_indices).sum(dim=1)  # 前 k 个类别的KL散度
+            topk_kl_loss = kl_div_loss.gather(dim=1, index=top_k_indices)  # 前 k 个类别的KL散度
+            topk_kl_loss = torch.sum(weight * topk_kl_loss, dim=-1)
+            kl_div_final_loss = torch.mean(topk_kl_loss)
+
+            loss_list.append(kl_div_final_loss)
+
+        loss = torch.sum(torch.stack(loss_list))
+        return loss, loss_list
+
+    def compute_loss(self, data_list, rst_list):
+        cost_all = torch.tensor(0.0, dtype=torch.float32)
+        all_hero_loss_list = []
+        all_acc_list = []
+
+        top_k = 3
+
+        # sub_action_mask，从官方数据集中提取得到
+        hero_legal_sub_action_list = [
+            [
+                [0, 0, 0, 0, 0, 0],
+                [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [2.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [4.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [5.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [6.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [7, 0, 0, 0, 0, 0],
+                [8.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [9, 0, 0, 0, 0, 0],
+                [10, 0, 0, 0, 0, 0],
+                [11.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [12, 0, 0, 0, 0, 0]
+            ],
+            [
+                [0, 0, 0, 0, 0, 0],
+                [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [2.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [4.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [5.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [6.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [7, 0, 0, 0, 0, 0],
+                [8.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [9, 0, 0, 0, 0, 0],
+                [10, 0, 0, 0, 0, 0],
+                [11.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [12, 0, 0, 0, 0, 0]
+            ],
+            [
+                [0, 0, 0, 0, 0, 0],
+                [1.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [2.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+                [3.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [4.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [5.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [6.0, 1.0, 0.0, 1.0, 1.0, 1.0],
+                [7, 0, 0, 0, 0, 0],
+                [8.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+                [9, 0, 0, 0, 0, 0],
+                [10, 0, 0, 0, 0, 0],
+                [11.0, 1.0, 0.0, 0.0, 0.0, 0.0],
+                [12, 0, 0, 0, 0, 0]
+            ]
+        ]
+        hero_legal_sub_action_list = np.array(hero_legal_sub_action_list)
+        hero_legal_sub_action_list = torch.tensor(hero_legal_sub_action_list).to(rst_list[0][0].device)
+
+        for hero_index in range(len(data_list)):
+            this_hero_label_task_count = len(self.hero_label_size_list[hero_index])
+            data_index = 1
+
+            # legal action
+            official_legal_action_list = data_list[hero_index][1: 1 + 5]
+            data_index += this_hero_label_task_count
+
+            # reward
+            data_index += 1
+
+            # advantage
+            data_index += 1
+
+            # action (label)
+            this_hero_action_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
+            data_index += this_hero_label_task_count
+
+            # action (prob lists, each corresponds to a sub-task)
+            this_hero_probability_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
+            this_hero_logits_list = this_hero_probability_list
+            data_index += this_hero_label_task_count
+
+            # is_train
+            data_index += 1
+
+            # sub_action
+            this_hero_weight_list = data_list[hero_index][data_index:(data_index + this_hero_label_task_count)]
+            this_hero_weight_list_new = [torch.ones_like(t) for t in this_hero_weight_list]
+            data_index += this_hero_label_task_count  # originally (task_num + 1)
+
+            # policy network output
+            this_hero_fc_label_list = rst_list[hero_index][:-1]  # logits
+
+            # value network output
+            this_hero_value = rst_list[hero_index][-1]
+
+            # teacher的logits
+            teacher_logits_list = this_hero_logits_list
+            # 使用legal_action作为掩码对logits_list进行处理
+            teacher_masked_logits_list = []
+            for logits, legal_action in zip(teacher_logits_list, official_legal_action_list):
+                new_logits = logits.clone()
+                # new_logits[legal_action == 0] = float('-inf')
+                new_logits[legal_action == 0] = -1e8
+                teacher_masked_logits_list.append(new_logits)
+            teacher_topk_action_list = [torch.topk(x, top_k, dim=-1).indices for x in teacher_masked_logits_list]
+            # 替换sub_action
+            new_button = teacher_topk_action_list[0].reshape(-1).int()
+
+            new_sub_action_list1 = hero_legal_sub_action_list[hero_index][new_button]
+            new_sub_action_list = new_sub_action_list1.reshape(-1, top_k, 6)
+
+            # student 的logits
+            student_logits_list = this_hero_fc_label_list
+            # 使用legal_action作为掩码对logits_list进行处理
+            student_masked_logits_list = []
+            for logits, legal_action in zip(student_logits_list, official_legal_action_list):
+                new_logits = logits.clone()
+                # new_logits[legal_action == 0] = float('-inf')
+                new_logits[legal_action == 0] = -1e8
+                student_masked_logits_list.append(new_logits)
+            student_topk_action_list = [torch.topk(x, top_k, dim=-1).indices for x in student_masked_logits_list]
+
+            temperature = self.distill_temperature
+            lambda_weight = self.distill_weight
+
+            # hard label loss
+            this_hero_hard_loss_list = self._calculate_single_hero_hard_loss(this_hero_action_list,
+                                                                             this_hero_fc_label_list,
+                                                                             this_hero_weight_list)
+
+            # soft label loss
+            this_hero_soft_loss_list = self._calculate_single_hero_soft_loss(this_hero_fc_label_list,
+                                                                             this_hero_logits_list,
+                                                                             this_hero_weight_list_new)
+            # distill loss
+            this_hero_distill_loss_list = self._calculate_single_hero_distill_loss(this_hero_action_list,
+                                                                                   this_hero_fc_label_list,
+                                                                                   this_hero_logits_list,
+                                                                                   this_hero_weight_list_new,
+                                                                                   temperature=temperature,
+                                                                                   lambda_weight=lambda_weight)
+            # temperatured soft loss
+            this_hero_temperatured_soft_loss_list = self._calculate_single_temperatured_soft_loss(this_hero_action_list,
+                                                                                                  this_hero_fc_label_list,
+                                                                                                  this_hero_logits_list,
+                                                                                                  this_hero_weight_list_new,
+                                                                                                  temperature=temperature)
+            # kl_div loss
+            this_hero_kl_div_loss_list = self._calculate_single_hero_kl_div_loss(this_hero_action_list,
+                                                                                 this_hero_fc_label_list,
+                                                                                 this_hero_logits_list,
+                                                                                 this_hero_weight_list_new,
+                                                                                 temperature=temperature)
+            # topk kl_div loss
+            this_hero_topk_kl_div_loss_list = self._calculate_single_hero_topk_kl_div_loss(this_hero_action_list,
+                                                                                           this_hero_fc_label_list,
+                                                                                           teacher_masked_logits_list,
+                                                                                           new_sub_action_list,
+                                                                                           top_k=top_k)
+
+            cost_all = cost_all + \
+                       lambda_weight * this_hero_topk_kl_div_loss_list[0] + \
+                       this_hero_kl_div_loss_list[0] * (temperature ** 2)
+
+            all_hero_loss_list.append(
+                [
+                    this_hero_hard_loss_list[0],
+                    this_hero_soft_loss_list[0],
+                    this_hero_temperatured_soft_loss_list[0],
+                    this_hero_topk_kl_div_loss_list[0],
+                    this_hero_kl_div_loss_list[0]
+                ]
+            )
+
+            topk_acc_list = torch.zeros((5, top_k))
+            # 计算 top k action 准确率，student 相对 teacher
+            for action_idx in range(5):
+                teacher_actions = teacher_topk_action_list[action_idx]
+                student_actions = student_topk_action_list[action_idx]
+                teacher_sub_action_mask = new_sub_action_list[:, :, action_idx + 1].int()
+                is_equal = (student_actions == teacher_actions) & teacher_sub_action_mask
+                for kk in range(1, top_k + 1):
+                    count1 = torch.sum(is_equal[:, kk - 1])
+                    count2 = torch.sum(teacher_sub_action_mask[:, kk - 1])
+                    if count2 != 0:
+                        topk_acc_list[action_idx][kk - 1] = (count1 / count2).cpu()
+
+            all_acc_list.append(topk_acc_list)
+
+        # all_hero_loss_list (3, 5)   all_acc_list (5, top_k)
+        out_all_acc_list = torch.mean(torch.stack(all_acc_list), dim=0).cpu().numpy()
+        return cost_all, all_hero_loss_list, out_all_acc_list
+
+
+    def compute_rl_loss(self, data_list, rst_list):
         all_hero_loss_list = []
         total_loss = torch.tensor(0.0)
         for hero_index, hero_data in enumerate(data_list):
@@ -572,10 +889,13 @@ class Model(nn.Module):
                                                             _hero_label_size_list[task_index])
                     legal_action_flag_list_max_mask = (1 - _hero_legal_action_flag_list[task_index]) * boundary
 
+                    # print("task index: {}".format(task_index))
+                    # print(_hero_fc_label_result[task_index].shape)
+                    # print(legal_action_flag_list_max_mask.shape)
                     label_logits_subtract_max = torch.clamp(
                         _hero_fc_label_result[task_index] - torch.max(
                             _hero_fc_label_result[task_index] - legal_action_flag_list_max_mask, dim=1, keepdim=True
-                        ).values, -boundary, 1)
+                        ).old_values, -boundary, 1)
 
                     label_logits_subtract_max_list.append(label_logits_subtract_max)
 
@@ -632,40 +952,68 @@ class Model(nn.Module):
 
             total_loss = total_loss + _hero_all_loss_list[0]
             all_hero_loss_list.append(_hero_all_loss_list)
-        return total_loss, [total_loss, [all_hero_loss_list[0][1], all_hero_loss_list[0][2], all_hero_loss_list[0][3]], [all_hero_loss_list[1][1], all_hero_loss_list[1][2], all_hero_loss_list[1][3]], [all_hero_loss_list[2][1], all_hero_loss_list[2][2], all_hero_loss_list[2][3]]]
+        return total_loss, [total_loss, [all_hero_loss_list[0][1], all_hero_loss_list[0][2], all_hero_loss_list[0][3]],
+                            [all_hero_loss_list[1][1], all_hero_loss_list[1][2], all_hero_loss_list[1][3]],
+                            [all_hero_loss_list[2][1], all_hero_loss_list[2][2], all_hero_loss_list[2][3]]]
 
-    def format_data(self, datas, inference=False):
-        hero_data_list = []
-        for hero_index in range(self.hero_num):
-            hero_data = datas[hero_index].float()
-            hero_data.view(-1, self.hero_data_split_shape[hero_index][0])
-            hero_data = torch.unsqueeze(hero_data, 0)
-            hero_data_list.append(hero_data)
-        self.lstm_cell = datas[-2].float()
-        self.lstm_hidden = datas[-1].float()
-
-        return hero_data_list
-
-    def format_data_with_label(self, datas):
-        datas = datas.view(-1, self.hero_num, self.hero_data_len)
-        data_list = datas.permute(1, 0, 2)
+    def format_data(self, datas):  # ([32, 242352])  batch_size = 32
+        # datas_1 = datas.reshape(32, -1)
+        datas = datas.view(-1, self.hero_num, self.hero_data_len)  # ([32, 3, 80784])
+        data_list = datas.permute(1, 0, 2)  # ([3, 32, 80784])
 
         hero_data_list = []
         for hero_index in range(self.hero_num):
             # calculate length of each frame
-            hero_each_frame_data_length = np.sum(np.array(self.hero_data_split_shape[hero_index]))
-            hero_sequence_data_length = hero_each_frame_data_length * self.lstm_time_steps
-            hero_sequence_data_split_shape = [hero_sequence_data_length, self.lstm_unit_size, self.lstm_unit_size]
+            hero_each_frame_data_length = np.sum(np.array(self.hero_data_split_shape[hero_index]))  # 4921
+            hero_sequence_data_length = hero_each_frame_data_length * self.lstm_time_steps  # 78736 = 4921 * 16, 有连续16帧数据
+            hero_sequence_data_split_shape = [hero_sequence_data_length, self.lstm_unit_size,
+                                              self.lstm_unit_size]  # [78736, 1024, 1024]
 
             sequence_data, lstm_cell_data, lstm_hidden_data = data_list[hero_index].float().split(
-                hero_sequence_data_split_shape, dim=1)
-            reshape_sequence_data = sequence_data.reshape(-1, hero_each_frame_data_length)
+                hero_sequence_data_split_shape, dim=1)  # ([32, 78736]), ([32, 1024]), ([32, 1024])
+            reshape_sequence_data = sequence_data.reshape(-1,
+                                                          hero_each_frame_data_length)  # torch.Size([32 * 16, 4921])
             hero_data = reshape_sequence_data.split(self.hero_data_split_shape[hero_index], dim=1)
             hero_data = list(hero_data)  # convert from tuple to list
             hero_data.append(lstm_cell_data)
             hero_data.append(lstm_hidden_data)
             hero_data_list.append(hero_data)
+
+        # my_datas = self.convert_to_datas(hero_data_list)
+        # print("相等：", torch.equal(datas.view(-1, self.hero_num * self.hero_data_len), self.convert_to_datas(hero_data_list)))
         return hero_data_list
+
+    def convert_to_datas(self, hero_data_list):
+        # 计算每个英雄的数据长度
+        datas = []
+        for hero_index in range(self.hero_num):
+            # 获取每个英雄的数据
+            hero_data = hero_data_list[hero_index]
+
+            # 分别提取每个帧的数据
+            sequence_data = torch.cat(hero_data[:-2], dim=1)  # 除去 lstm_cell_data 和 lstm_hidden_data
+            lstm_cell_data = hero_data[-2]
+            lstm_hidden_data = hero_data[-1]
+
+            # 计算需要的形状
+            hero_each_frame_data_length = np.sum(np.array(self.hero_data_split_shape[hero_index]))
+            hero_sequence_data_length = hero_each_frame_data_length * self.lstm_time_steps
+
+            # 重塑数据为原始形状
+            reshaped_sequence_data = sequence_data.reshape(-1, self.lstm_time_steps, hero_each_frame_data_length)
+            reshaped_sequence_data = sequence_data.reshape(-1, hero_sequence_data_length)
+            hero_data = torch.cat([reshaped_sequence_data, lstm_cell_data, lstm_hidden_data], dim=1)
+            hero_data = hero_data.unsqueeze(0)
+            datas.append(hero_data)
+
+        # 将所有英雄的数据连接到一起
+        datas = torch.cat(datas, dim=0)  # (总英雄数, 32, 80784)
+        datas = datas.permute(1, 0, 2)
+
+        # 恢复为初始的形状
+        datas = datas.reshape(-1, self.hero_num * self.hero_data_len)  # (batch_size, hero_num * 每个英雄的每帧数据长度)
+        return datas
+
 
 #######################
 ## Utility functions ##
@@ -720,13 +1068,13 @@ class LSTMCell(nn.Module):
             nn.init.zeros_(self.fc.bias)
 
     def forward(self, input, hidden):
-        """Propogate img through the network."""
+        """Propogate input through the network."""
 
         # tag = None  #
         def recurrence(input, hidden):
             """Recurrence helper."""
             hx, cx = hidden  # n_b x hidden_dim
-            # gates = self.input_weights(img) + \
+            # gates = self.input_weights(input) + \
             #     self.hidden_weights(hx)
             if len(hx.shape) == 3:
                 assert hx.shape[0] == 1  # (time_steps=1, batch_size, hidden_dim)
@@ -927,17 +1275,17 @@ def _compute_conv_out_shape(kernel_size: Tuple[int, int], padding: Tuple[int, in
 def make_conv_layer(kernel_size: Tuple[int, int], in_channels: int, out_channels: int, padding: str,
                     stride: Tuple[int, int] = (1, 1), input_shape=None):
     """Wrapper function to create and initialize ``Conv2d`` layers. Returns output shape along the
-        way if img shape is supplied. Add support for 'same' and 'valid' padding scheme (would
+        way if input shape is supplied. Add support for 'same' and 'valid' padding scheme (would
         be unnecessary if using pytorch 1.9.0 and higher).
 
     Args:
         kernel_size (Tuple[int, int]): height and width of the kernel
-        in_channels (int): number of channels of the img image
+        in_channels (int): number of channels of the input image
         out_channels (int): number of channels of the convolution output
         padding (Union[str, Tuple[int, int]]): either explicit padding size to add in both
             directions or padding scheme (either "same" or "valid)
         stride (Union[int, Tuple[int, int]], optional): stride. Defaults to (1,1).
-        input_shape (Tuple[int, int], optional): height and width of the img image. Defaults
+        input_shape (Tuple[int, int], optional): height and width of the input image. Defaults
             to None.
 
     Returns:
@@ -978,5 +1326,5 @@ def make_conv_layer(kernel_size: Tuple[int, int], in_channels: int, out_channels
 
 
 if __name__ == '__main__':
-    net_torch = Model()
-    print(net_torch)
+    net = NetworkModel()
+    print(net)

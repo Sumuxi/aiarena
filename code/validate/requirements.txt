@@ -1,4 +1,0 @@
-protobuf==4.24.3
-absl-py==1.4.0
-onnxmltools==1.11.2
-onnxruntime==1.16.0

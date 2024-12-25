@@ -196,11 +196,11 @@ class Benchmark(object):
             self.model_manager.save_checkpoint(
                 self.net, self.optimizer, self.config_manager.save_model_dir, 0
             )
-            self.model_manager.send_model(
-                self.config_manager.save_model_dir,
-                self.config_manager.send_model_dir,
-                0
-            )
+            # self.model_manager.send_model(
+            #     self.config_manager.save_model_dir,
+            #     self.config_manager.send_model_dir,
+            #     0
+            # )
 
     def do_train_step(self, step_context: StepContext, _input_datas):
         self.optimizer.zero_grad()
@@ -242,12 +242,18 @@ class Benchmark(object):
                     self.distributed_backend == "horovod" and self.node.has_hvd
             ):  # only horovod mode needs
                 self.optimizer.synchronize()
-            results["pre_clip_total_norm"] = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters()]), 2)
+            results["pre_clip_total_norm"] = torch.norm(
+                torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters() if p.grad is not None]),
+                2
+            )
             if self.config_manager.use_grad_clip:  # grad clip
                 torch.nn.utils.clip_grad_norm_(
                     self.parameters, self.config_manager.grad_clip_range
                 )
-            results["post_clip_total_norm"] = torch.norm(torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters()]), 2)
+            results["post_clip_total_norm"] = torch.norm(
+                torch.stack([torch.norm(p.grad.detach(), 2) for p in self.net.parameters() if p.grad is not None]),
+                2
+            )
             if self.local_step % self.config_manager.display_every == 0:
                 step_context.set_forward_info(total_loss, info_list)
                 if self.config_manager.check_values:
@@ -344,11 +350,11 @@ class Benchmark(object):
                     self.config_manager.save_model_dir,
                     self.local_step,
                 )
-                self.model_manager.send_model(
-                    self.config_manager.save_model_dir,
-                    self.config_manager.send_model_dir,
-                    self.local_step.item()
-                )
+                # self.model_manager.send_model(
+                #     self.config_manager.save_model_dir,
+                #     self.config_manager.send_model_dir,
+                #     self.local_step.item()
+                # )
 
         # training finished
         images_per_sec = (
@@ -367,11 +373,11 @@ class Benchmark(object):
                 self.config_manager.save_model_dir,
                 self.local_step,
             )
-            self.model_manager.send_model(
-                self.config_manager.save_model_dir,
-                self.config_manager.send_model_dir,
-                self.local_step.item()
-            )
+            # self.model_manager.send_model(
+            #     self.config_manager.save_model_dir,
+            #     self.config_manager.send_model_dir,
+            #     self.local_step.item()
+            # )
 
     def run(self):
         self._do_train()

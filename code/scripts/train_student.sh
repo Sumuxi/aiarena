@@ -1,0 +1,2 @@
+python learner/train.py --exp_name=arch4e1 --model_file=models.arch4 --batch_size=512 --temperature=4 --lr_decay=0 --lr_start=0.0002 --local_rank=4 >../logs/arch4e1 2>&1 &
+python learner/train.py --exp_name=arch4e2 --model_file=models.arch4 --batch_size=128 --temperature=4 --lr_decay=0 --lr_start=0.0002 --local_rank=5 >../logs/arch4e2 2>&1 &

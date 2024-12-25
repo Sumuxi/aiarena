@@ -13,6 +13,7 @@ from absl import flags
 
 FLAGS = flags.FLAGS
 flags.DEFINE_string("exp_name", "test", "experiment name")  # 指定本次实验的名称，方便保存相关文件到对应的目录
+flags.DEFINE_integer("use_ddp", 0, "use_ddp")
 flags.DEFINE_integer("local_rank", 0, "local_rank")
 flags.DEFINE_string("model_file", "NetworkModel", "model file name")  # 指定模型文件名（不带后缀）
 flags.DEFINE_integer("batch_size", 32, "batch size")
@@ -33,12 +34,17 @@ def load_class(module_name, class_name):
 
 
 def main(argv):
-    project_dir = "/aiarena"
+    # project_dir = "/aiarena"
+    cwd = os.getcwd()
+    if 'aiarena' in cwd:
+        project_dir = os.path.join(cwd.split('aiarena')[0], "aiarena")
+    else:
+        project_dir = os.path.join(argv[0].split('aiarena')[0], "aiarena")
     exp_save_dir = os.path.join(project_dir, "output", FLAGS.exp_name)
 
     config_path = os.path.join(os.path.dirname(__file__), "config", "common.conf")
     config_manager = ConfigControl(config_path)
-
+    config_manager.distributed_backend = 'ddp' if FLAGS.use_ddp else None
     config_manager.exp_save_dir = exp_save_dir
     config_manager.save_model_dir = os.path.join(exp_save_dir, "ckpt")
     config_manager.train_dir = os.path.join(exp_save_dir, "logs/learner")
@@ -66,7 +72,7 @@ def main(argv):
         from rl_framework.learner.framework.pytorch.apd_benchmark import Benchmark
         # from networkmodel.pytorch.model_v4 import NetworkModel
         # 改成动态导入
-        module_name = f"networkmodel.pytorch.{model_file}"
+        module_name = f"{model_file}"
         class_name = "NetworkModel"
         NetworkModel = load_class(module_name, class_name)
 
@@ -80,13 +86,13 @@ def main(argv):
             "Support backend in [pytorch], Check your training backend..."
         )
 
-    node_info = NodeInfo(rank=FLAGS.local_rank, rank_size=8, local_rank=FLAGS.local_rank, local_size=8)
+    node_info = NodeInfo() if FLAGS.use_ddp else NodeInfo(rank=FLAGS.local_rank, rank_size=1, local_rank=FLAGS.local_rank, local_size=1)
     adapter = OfflineRlInfoAdapter(Config.data_shapes)
     config_manager.push_to_modelpool = False
     dataset = NetworkDatasetLocal(
         config_manager,
         adapter,
-        npz_directory="/aiarena/dataset/train_with_logits",
+        npz_directory=os.path.join(project_dir, "dataset/train_with_logits"),
         file_cnt=Config.FILE_CNT,
     )
     log_manager = LogManager(loss_file_path=os.path.join(config_manager.train_dir, "loss.txt"), backend="pytorch")
